@@ -1489,6 +1489,10 @@ def bolt_need(job: dict, resident_gb: float) -> tuple[bool, str] | None:
     measured peak here (Bolt then goes). On a DGX Spark the memory guard's estimate (clips, songs, sound; Drama 3's
     NEED_GB); on a Mac the peaks measured on an M5 Ultra (bolt.MAC_PEAK_GB) against what vm_stat counts as available."""
 
+    if windows_x64_stills.x64_still_job(job):
+        # System RAM and VRAM are separate. The Mac scout peak (28 GB) is not this job.
+        said = windows_x64_stills.admission(job.get("params") or {})
+        return bool(said["fits"]), said["reason"] or "Windows x64 stills fit in free system RAM."
     if not SPARK:
         free = voice.mem_available_gb()
         if free < 0:
@@ -1519,6 +1523,8 @@ def job_fit(job: dict, room: int | None = None) -> dict | None:
     available memory and Bolt's 8 GB floor. memory_manager.admit asks this before the job loads anything."""
 
     kind, params = job["kind"], job["params"]
+    if windows_x64_stills.x64_still_job(job):
+        return windows_x64_stills.admission(params)
     if not SPARK:
         free = voice.mem_available_gb()
         if free < 0 or kind not in bolt.MAC_PEAK_GB:

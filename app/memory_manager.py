@@ -409,11 +409,19 @@ def admit(job: dict, fit, wait_s: float | None = None, mode: str | None = None, 
     if (job.get("progress") or {}).get("stage", "").startswith("Waiting for memory"):
         job.pop("progress", None)
     need, have, floor = said.get("need_mb") or 0, said.get("available_mb") or 0, said.get("floor_mb") or 0
-    why = (f"This job needs about {need / 1024:.0f} GB and this machine has {have / 1024:.0f} GB for it with "
-           f"{floor / 1024:.0f} GB kept free" + (f", after the Studio's idle modules were unloaded" if lines else "") + ". ")
-    why += (f"The largest other programs on it: {said_foreign(others[:3])}. Stop one of them (or wait for it to finish) and "
-            f"queue the job again; the Studio does not stop programs it did not start." if others else
-            "Free some memory and queue the job again.")
+    if said.get("reason"):
+        why = said["reason"]
+        if lines:
+            why += " The Studio's idle modules were unloaded first."
+        extra = [one for one in others[:3] if one["name"] not in why]
+        if extra:
+            why += " Other large programs: " + said_foreign(extra) + "."
+    else:
+        why = (f"This job needs about {need / 1024:.0f} GB and this machine has {have / 1024:.0f} GB for it with "
+               f"{floor / 1024:.0f} GB kept free" + (f", after the Studio's idle modules were unloaded" if lines else "") + ". ")
+        why += (f"The largest other programs on it: {said_foreign(others[:3])}. Stop one of them (or wait for it to finish) and "
+                f"queue the job again; the Studio does not stop programs it did not start." if others else
+                "Free some memory and queue the job again.")
     if (mode or _guard().guard_mode()) == "warn":
         note("warned", job=job.get("id"), kind=job.get("kind"), need_mb=need, available_mb=have)
         return "".join(lines) + f"[studio] memory: {why} It runs anyway (STUDIO_MEMORY_GUARD=warn) and fails if memory runs out.\n"

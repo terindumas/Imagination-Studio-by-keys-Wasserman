@@ -14,14 +14,19 @@ import json
 import os
 from pathlib import Path
 import platform
+import subprocess
 import sys
 
 MAX_COUNT = 6
 TIMEOUT_S = 1800
 AUTO = "z-image-turbo"
 # A 16 GB laptop cannot hold Z-Image's text encoder and transformer on the GPU together.
-# At or above this dedicated size the generator keeps the whole pipeline on the GPU.
+# At or above this much *free* VRAM the generator keeps the whole pipeline on the GPU.
 FULL_GPU_BYTES = 22 * (1024 ** 3)
+# Admission is two pools. Host is system RAM (the offloaded text encoder lives there).
+# VRAM is what one part needs on the card. These are not the Mac scout peak (28 GB).
+HOST_NEED_MB = {"z-image-turbo": 16384, "sd15": 8192}
+VRAM_NEED_MB = {"z-image-turbo": 10240, "sd15": 5120}
 
 MODELS: dict[str, dict] = {
     "z-image-turbo": {
@@ -193,9 +198,8 @@ def option_rows() -> list[dict]:
             "scope": (f"{spec['min_side']}–{spec['max_side']} px, multiples of 16, "
                       f"at most {spec['max_pixels']} pixels, 1–{MAX_COUNT} images."),
             "requirements": [
-                {"pool": "device", "required_mb": 8192 if model == "sd15" else 12288,
-                 "reserve_mb": 1024, "basis": "estimated"},
-                {"pool": "host", "required_mb": 16384, "reserve_mb": 4096, "basis": "estimated"},
+                {"pool": "device", "required_mb": VRAM_NEED_MB[model], "reserve_mb": 0, "basis": "estimated"},
+                {"pool": "host", "required_mb": HOST_NEED_MB[model], "reserve_mb": 0, "basis": "estimated"},
             ],
             "setup": SETUP if model == AUTO else SETUP.replace("-Model auto", f"-Model {model}"),
             "check_available": False,
@@ -322,6 +326,114 @@ def image_plan(params: dict) -> list[tuple[str, int, str]]:
     prompts = params["prompts"] if batch else [params["prompt"]] * params["count"]
     seeds = params.get("seeds", [params["seed"] + i for i in range(params["count"])])
     return [(prompt, seed, f"scout_s{seed}.png") for prompt, seed in zip(prompts, seeds, strict=True)]
+
+
+def x64_still_job(job: dict) -> bool:
+    """A queued still on this Windows x64 CUDA path, not a Mac scout and not SD-Turbo."""
+    params = job.get("params") or {}
+    return job.get("kind") == "scout" and is_x64_host() and is_model(params.get("image_model"))
+
+
+def should_offload(kind: str, free_bytes: int) -> bool:
+    """Z-Image moves one part onto the GPU when free VRAM is under a full resident load."""
+    return kind == "zimage" and free_bytes < FULL_GPU_BYTES
+
+
+def parse_compute_apps(text: str) -> list[tuple[int, str, int]]:
+    """nvidia-smi compute-app rows: pid, process name, used MiB."""
+    rows = []
+    for line in text.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[2].isdigit():
+            continue
+        rows.append((int(parts[0]), parts[1], int(parts[2])))
+    return rows
+
+
+def describe_holders(rows: list[tuple[int, str, int]]) -> list[str]:
+    large = sorted((row for row in rows if row[2] >= 1024), key=lambda row: -row[2])
+    return [f"{name or 'unknown'} (PID {pid}, {mb / 1024:.1f} GB)" for pid, name, mb in large[:3]]
+
+
+def host_free_mb() -> int | None:
+    """Free system RAM in MiB. Not GPU memory."""
+    if sys.platform == "win32":
+        try:
+            import windows_memory
+            return int(windows_memory.host_memory()[1])
+        except (OSError, RuntimeError, ValueError):
+            return None
+    return None
+
+
+def gpu_free_mb() -> int | None:
+    """Free VRAM in MiB on the studio card, or None when nvidia-smi has no discrete card."""
+    try:
+        spark = str(Path(__file__).resolve().parent.parent / "spark")
+        if spark not in sys.path:
+            sys.path.insert(0, spark)
+        import memory_guard
+        card = memory_guard.device(fresh=True)
+    except (OSError, RuntimeError, ValueError, ImportError):
+        return None
+    if not card:
+        return None
+    return int(card.get("head_free_mb", card["free_mb"]))
+
+
+def gpu_holders() -> list[str]:
+    """Names of compute apps using at least 1 GB of VRAM. Empty when nvidia-smi does not answer."""
+    try:
+        said = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,process_name,used_gpu_memory",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=0x08000000 if sys.platform == "win32" else 0)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if said.returncode != 0:
+        return []
+    return describe_holders(parse_compute_apps(said.stdout))
+
+
+def memory_fit(model: str, *, host_free_mb: int | None, gpu_free_mb: int | None,
+               holders: list[str] | None = None) -> dict:
+    """Host RAM and VRAM checked apart. A low GPU does not pretend the PC has 0 GB of RAM, and the
+    Mac scout peak is not the requirement."""
+    if model not in MODELS:
+        raise ValueError(f"unknown Windows x64 picture model {model}")
+    title = MODELS[model]["title"]
+    host_need = HOST_NEED_MB[model]
+    vram_need = VRAM_NEED_MB[model]
+    host_ok = host_free_mb is not None and host_free_mb >= host_need
+    vram_known = gpu_free_mb is not None
+    offload = MODELS[model]["kind"] == "zimage" and (not vram_known or gpu_free_mb * 1024 * 1024 < FULL_GPU_BYTES)
+    vram_ok = (not vram_known) or gpu_free_mb >= vram_need
+    parts = []
+    if not (host_ok and vram_ok):
+        if host_free_mb is None:
+            parts.append(f"{title} needs about {host_need / 1024:.0f} GB of free system RAM and that figure could not be read.")
+        else:
+            parts.append(f"{title} needs about {host_need / 1024:.0f} GB of free system RAM and this PC has {host_free_mb / 1024:.0f} GB.")
+    if vram_known and not vram_ok:
+        how = "The text encoder stays in system RAM and one part moves onto the GPU." if offload else "The model stays on the GPU."
+        parts.append(f"It needs about {vram_need / 1024:.0f} GB of free GPU memory and this GPU has {gpu_free_mb / 1024:.1f} GB free. {how}")
+        named = holders or []
+        if named:
+            parts.append("Holding that GPU memory: " + "; ".join(named) + ". The Studio does not stop that program.")
+        else:
+            parts.append("No GPU process of at least 1 GB was named. Check Task Manager's Dedicated GPU memory column.")
+    return {"fits": host_ok and vram_ok, "need_mb": host_need,
+            "available_mb": 0 if host_free_mb is None else host_free_mb, "floor_mb": 0,
+            "vram_need_mb": vram_need, "vram_free_mb": gpu_free_mb, "offload": offload and vram_ok,
+            "reason": " ".join(parts)}
+
+
+def admission(params: dict) -> dict:
+    model = (params or {}).get("image_model") or AUTO
+    gpu = gpu_free_mb()
+    return memory_fit(model, host_free_mb=host_free_mb(), gpu_free_mb=gpu,
+                      holders=gpu_holders() if gpu is not None else [])
 
 
 def build(params: dict, home_dir: Path, job_id: str) -> tuple[list[str], dict, list[str]]:

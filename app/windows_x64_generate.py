@@ -63,9 +63,15 @@ def generate(request: dict) -> list[Path]:
     spec = stills.MODELS[model]
     root = Path(request["model_dir"])
     name = torch.cuda.get_device_name(0)
-    total = torch.cuda.get_device_properties(0).total_memory
-    print(f"[tensorfold] engine: cuda", flush=True)
+    free_bytes, _total = torch.cuda.mem_get_info()
+    print("[tensorfold] engine: cuda", flush=True)
     print(f"[tensorfold] stage 1/3 load {name}", flush=True)
+    need_bytes = stills.VRAM_NEED_MB[model] * 1024 * 1024
+    if free_bytes < need_bytes:
+        holders = stills.gpu_holders()
+        said = stills.memory_fit(model, host_free_mb=stills.HOST_NEED_MB[model], gpu_free_mb=free_bytes // (1024 * 1024),
+                                 holders=holders)
+        raise RuntimeError(said["reason"] or "not enough free GPU memory")
     if spec["kind"] == "zimage":
         pipe = ZImagePipeline.from_pretrained(str(root), torch_dtype=torch.bfloat16, local_files_only=True,
                                               low_cpu_mem_usage=True)
@@ -75,7 +81,7 @@ def generate(request: dict) -> list[Path]:
             safety_checker=None, feature_extractor=None, requires_safety_checker=False)
     if hasattr(pipe, "set_progress_bar_config"):
         pipe.set_progress_bar_config(disable=True)
-    offload = spec["kind"] == "zimage" and total < stills.FULL_GPU_BYTES
+    offload = stills.should_offload(spec["kind"], free_bytes)
     if offload:
         pipe.enable_model_cpu_offload()
         print("[tensorfold] stage 2/3 offload text encoder stays in system RAM", flush=True)

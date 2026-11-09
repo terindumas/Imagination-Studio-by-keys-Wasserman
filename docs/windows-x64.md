@@ -78,6 +78,8 @@ $body = @{
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:7870/api/jobs -ContentType "application/json" -Body $body
 ```
 
+Admission checks two pools. Z-Image-Turbo needs about **16 GB of free system RAM** and about **10 GB of free GPU memory** (the transformer, with the text encoder left in RAM). DreamShaper 8 needs about 8 GB of RAM and 5 GB of VRAM. A low GPU does not make the PC look like it has 0 GB of RAM, and the Mac scout figure of 28 GB is not used. When the GPU is short, the refusal names the compute app holding it. Z-Image offloads whenever free VRAM is under 22 GB.
+
 `/api/state` then reports `windows_stills.available: true`, the model in `image_models`, and `ui_only: false`.
 The PNG lands under the Studio home's `scouts\<job id>\`. The first run spends most of its time loading
 weights. Later runs reuse the process only for that job; the venv is not a resident server.

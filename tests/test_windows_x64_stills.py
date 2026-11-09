@@ -6,6 +6,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+import memory_manager
 import server
 import windows_runtime
 import windows_x64_generate as generate
@@ -158,6 +159,53 @@ def test_installed_backend_reports_stills_and_queues_the_apple(client, monkeypat
     assert request["images"][0]["prompt"] == "a red apple on a white table"
     assert [Path(path).name for path in outputs] == ["scout_s1.png", "sheet.jpg"]
     assert client.post("/api/jobs", json={"kind": "video", "params": {"prompt": "a clip"}}).status_code == 501
+
+
+def test_x64_admission_uses_host_ram_and_names_the_gpu_holder(monkeypatch):
+    rows = stills.parse_compute_apps("4321, sd-cuda.exe, 14336\n9, [N/A], 100\n")
+    assert stills.describe_holders(rows) == ["sd-cuda.exe (PID 4321, 14.0 GB)"]
+    short = stills.memory_fit("z-image-turbo", host_free_mb=30 * 1024, gpu_free_mb=200, holders=stills.describe_holders(rows))
+    assert short["fits"] is False
+    assert short["need_mb"] == 16384
+    assert short["available_mb"] == 30 * 1024
+    assert "16 GB" in short["reason"] and "sd-cuda.exe" in short["reason"]
+    assert "28" not in short["reason"] and "0.2 GB" in short["reason"]
+    fits = stills.memory_fit("z-image-turbo", host_free_mb=30 * 1024, gpu_free_mb=14 * 1024, holders=[])
+    assert fits["fits"] is True and fits["offload"] is True and fits["need_mb"] == 16384
+    small = stills.memory_fit("sd15", host_free_mb=10 * 1024, gpu_free_mb=6 * 1024, holders=[])
+    assert small["fits"] is True and small["offload"] is False
+    low_ram = stills.memory_fit("z-image-turbo", host_free_mb=12 * 1024, gpu_free_mb=14 * 1024, holders=[])
+    assert low_ram["fits"] is False and "16 GB" in low_ram["reason"] and "28" not in low_ram["reason"]
+    assert stills.should_offload("zimage", 12 * (1024 ** 3))
+    assert not stills.should_offload("zimage", 23 * (1024 ** 3))
+    assert not stills.should_offload("sd15", 4 * (1024 ** 3))
+    assert server.mac_peak_gb({"kind": "scout", "params": {}}) == 28.0
+
+    monkeypatch.setattr(server, "SPARK", False)
+    monkeypatch.setattr(server, "WINDOWS", True)
+    monkeypatch.setenv("STUDIO_X64_HOST", "1")
+    monkeypatch.setattr(stills, "host_free_mb", lambda: 30 * 1024)
+    monkeypatch.setattr(stills, "gpu_free_mb", lambda: 200)
+    monkeypatch.setattr(stills, "gpu_holders", lambda: ["sd-cuda.exe (PID 4321, 14.0 GB)"])
+    job = {"kind": "scout", "params": {"image_model": "z-image-turbo", "prompt": "a red apple on a white table"}}
+    refused = server.job_fit(job)
+    assert refused["fits"] is False and refused["need_mb"] == 16384
+    assert "sd-cuda.exe" in refused["reason"] and "28" not in refused["reason"]
+    fits_bolt, why = server.bolt_need(job, 8)
+    assert fits_bolt is False and "sd-cuda.exe" in why and "28" not in why
+    monkeypatch.setattr(stills, "gpu_free_mb", lambda: 14 * 1024)
+    monkeypatch.setattr(stills, "gpu_holders", lambda: [])
+    assert server.job_fit(job)["fits"] is True
+    assert server.bolt_need(job, 8)[0] is True
+
+    monkeypatch.setenv("STUDIO_MEMORY_MANAGER", "on")
+    monkeypatch.setattr(memory_manager, "foreign", lambda *args, **kwargs: [])
+    monkeypatch.setattr(memory_manager.time, "sleep", lambda _seconds: None)
+    queued = {"id": "j", "kind": "scout", "status": "queued", "params": job["params"]}
+    with pytest.raises(RuntimeError, match="sd-cuda.exe") as error:
+        memory_manager.admit(queued, lambda: short, wait_s=0)
+    assert "28" not in str(error.value)
+    assert "16 GB" in str(error.value)
 
 
 def test_generator_does_not_listen_and_the_arm_installer_stays_arm_only():

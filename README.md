@@ -14,6 +14,8 @@ Available models and settings depend on the machine, installed components and ru
 **Studio runs natively on Windows; there is no WSL version.** The native GPU setup targets **Windows 11 on Arm with an
 NVIDIA RTX Spark**, with 128 GB configurations intended for the full feature set. Smaller machines can use
 features that fit their GPU/runtime memory requirements and pass local validation.
+A discrete NVIDIA GPU on **Windows 11 x64** (an RTX 4090 Laptop with 16 GB, for example) generates stills through
+[Windows x64 stills](docs/windows-x64.md). That path does not install H3 video or the Arm stack.
 Planning, imports, settings and media browsing do not require large model downloads.
 
 Run the Windows installer in an administrator PowerShell:

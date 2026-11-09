@@ -167,6 +167,7 @@ import windows_features
 import windows_checks
 import windows_foley
 import windows_runtime
+import windows_x64_stills
 if WINDOWS or WIN32:
     os.environ.update(windows_runtime.session_env())
 WINDOWS_NOTE = ("Native Windows: each feature selects its installed backend. Machine > Feature checks explains model choices, "
@@ -1104,6 +1105,8 @@ IMAGE_MODELS = {"qwen": ("Qwen 2.1 Turbo", "8 steps, the quickest draft; Qwen Re
                 "flux3k-full": ("FLUX3-K Full", "FLUX 3 Image Klein base, 50 steps: the most detail, about 5x slower than Fast"),
                 "moss-image": ("MOSS-Image", "25 steps: exact lettering for posters, titles and signs; Apache 2.0, commercial use allowed")}
 IMAGE_MODELS["sd-turbo"] = ("SD-Turbo", "Windows storyboard draft, 512x512, one step; Stability AI Community License")
+IMAGE_MODELS["z-image-turbo"] = ("Z-Image-Turbo", "8 steps, 1024-class stills on a 16 GB NVIDIA GPU; Apache-2.0")
+IMAGE_MODELS["sd15"] = ("DreamShaper 8", "SD1.5-class stills, 512–768; CreativeML OpenRAIL-M")
 # BFL's file names, the present one first (renamed 2026-10-17, the same files; spark_generate.FLUX3_OLD)
 FLUX3_FILES = {"flux3k-fast": ("flux3-image-klein-bf16.safetensors", "flux3_image_klein_sd_bf16.safetensors"),
                "flux3k-full": ("flux3-image-klein-base-bf16.safetensors", "flux3_image_klein_base_bf16.safetensors")}
@@ -1707,6 +1710,11 @@ def build(kind: str, params: dict, job_id: str, room: bool = True) -> tuple[list
             return finish.build(params, job_id, local_only=True) if kind == "finish" else action_build(kind, params, job_id)
         if kind != "scout":
             raise HTTPException(501, WINDOWS_NOTE)
+        if windows_x64_stills.is_model(params.get("image_model")):
+            try:
+                return windows_x64_stills.build(params, HOME, job_id)
+            except (OSError, RuntimeError, ValueError) as error:
+                raise HTTPException(400, str(error)) from None
         return windows_storyboard.build(params, HOME, job_id)
     if WINDOWS or WIN32:
         try:
@@ -2052,7 +2060,9 @@ def take(job: dict, params: dict, label: str = "") -> tuple[bool, dict, list[str
     """One render of a job's clip, on this machine or on the Spark the job was handed to (sparks.py), which leaves the
     clip at the same path: (False when the job was cancelled meanwhile, the environment, the output paths)."""
 
-    if (WINDOWS or WIN32) and job["kind"] in ("scout", "sfx") and windows_runtime.bounded(job["kind"], params):
+    x64_still = ((WINDOWS or WIN32) and job["kind"] == "scout"
+                 and windows_x64_stills.is_model(params.get("image_model")))
+    if (WINDOWS or WIN32) and job["kind"] in ("scout", "sfx") and windows_runtime.bounded(job["kind"], params) and not x64_still:
         expired = threading.Event()
         def timed_out():
             with lock:
@@ -2545,7 +2555,8 @@ def state() -> dict:
             # the picture models installed here, in the order the page offers them (IMAGE_MODELS)
             "image_models": [{"id": k, "label": IMAGE_MODELS[k][0], "note": IMAGE_MODELS[k][1]} for k in image_models()], "sharp": SHARP if "sharp" in PRESETS and "fh8" in QUALITIES else None, "custom": {"sides": CUSTOM_SIDES, "pixels": CUSTOM_PIXELS, "steps": CUSTOM_STEPS},
             "platform": machine()[0], "platform_label": machine()[1],
-            "ui_only": WINDOWS, "platform_note": "",
+            "ui_only": WINDOWS and not (windows_x64_stills.is_x64_host() and windows_x64_stills.status()["available"]),
+            "platform_note": windows_x64_stills.status()["note"] if windows_x64_stills.is_x64_host() and windows_x64_stills.status()["available"] else "",
             "feature_checks": windows_checks.discovery(local_windows),
             "windows_stills": windows_runtime.usage_status("scout", selected_mode=selected_mode) if local_windows else None,
             "gpu_index": (",".join(memory_guard.paired_gpus()) if not local_windows else "") or (os.environ["STUDIO_GPU"] if os.environ.get("STUDIO_GPU", "").isdigit() else None),
@@ -2565,12 +2576,15 @@ def state() -> dict:
             "music": music.state(),
             # NVIDIA Nemotron 3.5 Bolt, the brains' Studio-managed engine (bolt.py): its state, backend and memory
             "bolt": bolt.summary(),
-            "engine": ("CUDA · SD-Turbo (512x512 only)" if windows_storyboard.status()["available"] else "unavailable (Windows UI-only preview)") if WINDOWS else ("CUDA · TensorFold int8" if SPARK_ENGINE_LIB.exists() else "CUDA · ComfyUI") if SPARK else ("native Zig engine" if zig_ready() else "MLX engine")}
+            "engine": (windows_x64_stills.status()["engine"] if windows_x64_stills.is_x64_host() and windows_x64_stills.status()["available"] else
+                       "CUDA · SD-Turbo (512x512 only)" if windows_storyboard.status()["available"] else "unavailable (Windows UI-only preview)") if WINDOWS else ("CUDA · TensorFold int8" if SPARK_ENGINE_LIB.exists() else "CUDA · ComfyUI") if SPARK else ("native Zig engine" if zig_ready() else "MLX engine")}
     if local_windows:
         out["image_model_options"] = choices
         out["windows_runtime"] = {"qualification": selected_mode, "image_models": choices,
                                   "backend": "per-feature", "native_core": windows_cuda.status()}
-        out["windows_stills"]["backend"] = windows_runtime.backend_status()
+        out["windows_stills"] = windows_x64_stills.overlay(out["windows_stills"])
+        if not isinstance(out["windows_stills"].get("backend"), dict):
+            out["windows_stills"]["backend"] = windows_runtime.backend_status()
         if out["windows_stills"]["backend"].get("native"):
             with lock:
                 out["windows_stills"]["backend"]["busy"] = any(job["status"] in ("queued", "running") for job in jobs.values())
@@ -2613,7 +2627,9 @@ def state() -> dict:
             "why": "" if usable else "Model-based Library actions need their own setup and qualification in Machine > Feature checks."}
         for kind in ("voice", "music"):
             out["capabilities"][kind] = {key: out[kind].get(key) for key in ("available", "installed", "qualified", "why", "backend")}
-        out["engine"] = "Per-feature native Windows backends"
+        out["engine"] = (windows_x64_stills.status()["engine"]
+                         if windows_x64_stills.is_x64_host() and windows_x64_stills.status()["available"]
+                         else "Per-feature native Windows backends")
     if WINCUDA and not local_windows:
         out["windows_cuda"] = windows_cuda.status()
         out["capabilities"] = {kind: {"available": False, "why": windows_cuda.unsupported(kind)} for kind in windows_cuda.NOT_NATIVE}
@@ -2855,6 +2871,22 @@ def queue_job(body: dict) -> dict:
             return enqueue("sfx", body.get("title") or sound_title("sfx", params), params)
         if body.get("kind") != "scout":
             raise HTTPException(501, WINDOWS_NOTE)
+        if windows_x64_stills.is_model((body.get("params") or {}).get("image_model")):
+            asked = body["params"]["image_model"]
+            if asked not in windows_x64_stills.ready_models():
+                raise HTTPException(501, windows_x64_stills.model_why(asked))
+            if body.get("placement") is not None or body.get("sparks") not in (None, 1):
+                raise HTTPException(400, "Windows stills run on this machine only")
+            if body.get("title") is not None and not isinstance(body["title"], str):
+                raise HTTPException(400, "title is text")
+            try:
+                params = windows_x64_stills.parameters(body.get("params") or {})
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from None
+            if params.get("suite_import"):
+                for shot_id in params["suite_shots"] if "suite_shots" in params else [params["suite_shot"]]:
+                    suite.storyboard_import(HOME, params["suite_import"], shot_id)
+            return enqueue("scout", body.get("title") or windows_x64_stills.MODELS[asked]["title"], params)
         image_ready = windows_runtime.usage_status("scout")
         if not image_ready["available"]:
             raise HTTPException(501, image_ready["why"])
@@ -3584,11 +3616,20 @@ def enqueue(kind: str, title: str, params: dict, estimate: int | None = None) ->
             raise HTTPException(501, feature_ready["why"])
         build(kind, params, "check")
     if local_bounded and kind == "scout":
-        params = windows_storyboard.parameters(params)
-        try:
-            windows_storyboard.preflight()
-        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-            raise HTTPException(400, str(error)) from None
+        if windows_x64_stills.is_model(params.get("image_model")):
+            why = windows_x64_stills.model_why(params["image_model"])
+            if why:
+                raise HTTPException(501, why)
+            try:
+                params = windows_x64_stills.parameters(params)
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from None
+        else:
+            params = windows_storyboard.parameters(params)
+            try:
+                windows_storyboard.preflight()
+            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                raise HTTPException(400, str(error)) from None
     if local_bounded and kind == "sfx":
         params = windows_sound.parameters(params)
         try:

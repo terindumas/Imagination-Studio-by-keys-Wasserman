@@ -142,7 +142,10 @@ def bounded(kind: str, params: dict | None = None) -> bool:
     if kind == "qualification" or kind == "graphics":
         return True
     if kind == "scout":
+        import windows_x64_stills
         model = (params or {}).get("image_model") or default_image()
+        if windows_x64_stills.is_model(model):
+            return True
         return model == "sd-turbo"
     if kind in ("hlg", "finish", "export"):
         return mode()["enabled"]
@@ -257,17 +260,28 @@ def image_options(selected_mode: dict | None = None) -> list[dict]:
                                                         for scope in verified) if verified else
                                  "512x512, one image is the basic check; larger canvases and counts are checked separately.")
             rows[-1]["measurement_source"] = "This machine's observed check, not a minimum RAM requirement." if found["qualified"] else "No successful native image check saved yet."
+    import windows_x64_stills
+    rows.extend(windows_x64_stills.option_rows())
     return rows
 
 
 def default_image() -> str:
+    import windows_x64_stills
     rows = image_options()
     ready = [row for row in rows if row["available"]]
     if not mode()["enabled"]:
         native = next((row for row in ready if row["backend"] == "native"), None)
         if native is not None:
             return native["id"]
-    return ready[0]["id"] if ready else "sd-turbo"
+    if windows_x64_stills.is_x64_host():
+        discrete = next((row for row in ready if row.get("backend") == "x64-cuda"), None)
+        if discrete is not None:
+            return discrete["id"]
+    if ready:
+        return ready[0]["id"]
+    if windows_x64_stills.is_x64_host():
+        return windows_x64_stills.AUTO
+    return "sd-turbo"
 
 
 def freeze(kind: str, params: dict) -> dict:

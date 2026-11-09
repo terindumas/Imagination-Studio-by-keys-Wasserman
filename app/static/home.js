@@ -62,7 +62,7 @@ const HC_MODES = { clip: ["Clip with sound", "minimax", "MiniMax H3", "Describe 
 const HC_RECIPES = () => ({ quick: "Quick look", ...(S && S.sharp ? { sharp: "Sharp Spec" } : {}), final: "Final 2K" });
 const hcMode = () => HC.mode || (HC_MODES[homePrefs().presets.mode] ? homePrefs().presets.mode : "clip");
 const hcRecipe = () => { const r = HC.recipe || homePrefs().presets.recipe; return HC_RECIPES()[r] ? r : "quick"; };
-const hcPictureModel = () => { const want = homePrefs().presets.image_model, have = S && S.image_models && S.image_models.length ? S.image_models.map(m => m.id) : ["qwen"]; return have.includes(want) ? want : "qwen"; };
+const hcPictureModel = () => { const want = homePrefs().presets.image_model, have = S && S.image_models && S.image_models.length ? S.image_models.map(m => m.id) : ["qwen"]; return have.includes(want) ? want : have[0]; };
 const hcSeed = () => typeof prefSeed === "function" ? prefSeed() : 1;
 const hcTitle = t => t.replace(/\s+/g, " ").trim().slice(0, 48);
 // a clip's length: the one picked here, else the recipe's, else Settings → Presets; over 15 s it is a long take, a chain of 15 s clips

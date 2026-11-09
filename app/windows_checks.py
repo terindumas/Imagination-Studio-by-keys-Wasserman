@@ -72,6 +72,9 @@ def timeout_seconds(job: dict) -> int:
             return audio.TIMEOUT_S + 120
         scopes = images.GROUPS[params["group"]][1] if params.get("group") in images.GROUPS else (params.get("scope", "basic"),)
         return sum(images.timeout_seconds(params["feature"], scope) + 120 for scope in scopes)
+    import windows_x64_stills
+    if job.get("kind") == "scout" and windows_x64_stills.is_model((job.get("params") or {}).get("image_model")):
+        return windows_x64_stills.TIMEOUT_S
     return 600
 
 

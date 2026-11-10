@@ -196,8 +196,11 @@ def test_load_paths_match_the_downloaded_layout(tmp_path, monkeypatch):
     assert calls[1][0] == "vae"
     assert Path(calls[1][1]) == ltx / "ltxv-2b-0.9.6-distilled-04-25.safetensors"
     assert Path(calls[1][2]["config"]) == windows_x64_video_generate.LTX_VAE_CONFIG
+    assert calls[1][2]["subfolder"] == "vae"
+    vae_config = Path(calls[1][2]["config"]) / calls[1][2]["subfolder"] / "config.json"
+    assert vae_config.is_file()
+    assert vae_config.resolve() == (Path(windows_x64_video_generate.__file__).resolve().parent / "ltx" / "vae-0.9.6" / "vae" / "config.json")
     assert calls[1][2]["local_files_only"] is True
-    assert "subfolder" not in calls[1][2]
     pipe_path, pipe_kwargs = calls[2][1], calls[2][2]
     assert Path(pipe_path) == ltx and pipe_kwargs["transformer"] == "transformer"
     assert pipe_kwargs["vae"] == "vae-0.9.6"
@@ -257,10 +260,17 @@ def test_tokenizer_preflight_names_protobuf_and_tiktoken():
     assert windows_x64_video_generate.missing_tokenizer_deps(refuse) == ["sentencepiece", "protobuf", "tiktoken"]
     requirements = (Path(__file__).resolve().parents[1] / "app" / "requirements-windows-x64.txt").read_text(encoding="utf-8")
     assert "protobuf>=" in requirements and "tiktoken>=" in requirements and "sentencepiece>=" in requirements
-    script = (Path(__file__).resolve().parents[1] / "scripts" / "setup-windows-x64-video.ps1").read_text(encoding="utf-8")
-    assert "Invoke-Python @($GpuPython) @('-m', 'pip', 'install', '-r', $Requirements)" in script
-    assert "& $GpuPython -m pip install" not in script
-    assert "--check-tokenizer" in script
+    root = Path(__file__).resolve().parents[1] / "scripts"
+    for name in ("setup-windows-x64-video.ps1", "setup-windows-x64-images.ps1"):
+        script = (root / name).read_text(encoding="utf-8")
+        assert "*> $log" not in script
+        assert "$ErrorActionPreference = 'Continue'" in script
+        assert "cmd.exe /d /s /c" in script
+        assert "$code = $LASTEXITCODE" in script
+    video_script = (root / "setup-windows-x64-video.ps1").read_text(encoding="utf-8")
+    assert "Invoke-Python @($GpuPython) @('-m', 'pip', 'install', '-r', $Requirements)" in video_script
+    assert "& $GpuPython -m pip install" not in video_script
+    assert "--check-tokenizer" in video_script
 
 
 def test_missing_video_weights_name_the_installer_not_the_arm_venv(client, monkeypatch, tmp_path):

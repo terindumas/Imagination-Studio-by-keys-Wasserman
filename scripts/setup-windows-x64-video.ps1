@@ -18,40 +18,51 @@ param(
   [switch]$Rollback
 )
 $ErrorActionPreference = 'Stop'
-# tqdm and Hugging Face write progress to stderr. That is not a failed command.
-$PSNativeCommandUseErrorActionPreference = $false
 $Repo = Split-Path $PSScriptRoot -Parent
 $Helper = Join-Path $Repo 'app\windows_x64_video.py'
 $Requirements = Join-Path $Repo 'app\requirements-windows-x64.txt'
 
+function Invoke-Python([string[]]$Prefix, [string[]]$Arguments) {
+  # Windows PowerShell 5.1 turns redirected native stderr into a NativeCommandError when
+  # $ErrorActionPreference is Stop, even if the program exits 0. That preference variable
+  # for native commands exists only in PowerShell 7. cmd writes both streams to files.
+  # $LASTEXITCODE is the only failure signal.
+  $preference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $stamp = [guid]::NewGuid().ToString()
+  $out = Join-Path $env:TEMP ("studio-x64-" + $stamp + ".out")
+  $err = Join-Path $env:TEMP ("studio-x64-" + $stamp + ".err")
+  try {
+    $pieces = @()
+    foreach ($part in @($Prefix + $Arguments)) {
+      $pieces += '"' + ($part -replace '"', '""') + '"'
+    }
+    $inner = ($pieces -join ' ') + ' > "' + $out + '" 2> "' + $err + '"'
+    cmd.exe /d /s /c "`"$inner`""
+    $code = $LASTEXITCODE
+    foreach ($path in @($out, $err)) {
+      if (Test-Path -LiteralPath $path) {
+        Get-Content -LiteralPath $path -ErrorAction SilentlyContinue | Write-Host
+      }
+    }
+    if ($null -eq $code) { return 1 }
+    return [int]$code
+  } finally {
+    $ErrorActionPreference = $preference
+    Remove-Item -LiteralPath $out, $err -ErrorAction SilentlyContinue
+  }
+}
 function Get-SetupPython {
+  $probe = @('-c', 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 13) else 1)')
   if (Get-Command py -ErrorAction SilentlyContinue) {
-    & py -3.13 -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 13) else 1)"
-    if ($LASTEXITCODE -eq 0) { return @('py', '-3.13') }
+    if ((Invoke-Python @('py', '-3.13') $probe) -eq 0) { return @('py', '-3.13') }
   }
   foreach ($name in @('python', 'python3')) {
     if (Get-Command $name -ErrorAction SilentlyContinue) {
-      & $name -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 13) else 1)"
-      if ($LASTEXITCODE -eq 0) { return @($name) }
+      if ((Invoke-Python @($name) $probe) -eq 0) { return @($name) }
     }
   }
   throw 'Python 3.13 is required (py -3.13). Nothing was downloaded.'
-}
-function Invoke-Python([string[]]$Prefix, [string[]]$Arguments) {
-  # A function's stdout is its return value. The helper's JSON must not be mixed into the exit code,
-  # and a pipeline would replace the native exit code, so the log goes to a file first.
-  $PSNativeCommandUseErrorActionPreference = $false
-  $log = Join-Path $env:TEMP ("studio-x64-" + [guid]::NewGuid().ToString() + ".log")
-  try {
-    if ($Prefix.Length -gt 1) { & $Prefix[0] $Prefix[1] @Arguments *> $log }
-    else { & $Prefix[0] @Arguments *> $log }
-    $code = $LASTEXITCODE
-    if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | Write-Host }
-    if ($null -eq $code) { return 1 }
-    return $code
-  } finally {
-    Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
-  }
 }
 function Invoke-Helper([string[]]$Prefix, [string[]]$HelperArgs) {
   $code = Invoke-Python $Prefix (@('-X', 'utf8', $Helper) + $HelperArgs)

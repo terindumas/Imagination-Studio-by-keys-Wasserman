@@ -203,8 +203,11 @@ def load_ltx(root: Path, dtype, image: str | None):
     transformer = ltx_transformer_cls(diffusers).from_single_file(
         args["checkpoint"], config=args["config"], subfolder=args["subfolder"],
         torch_dtype=dtype, local_files_only=True)
+    # When config is set, this diffusers build does not apply the VAE's default subfolder.
+    # config.json lives at vae-0.9.6/vae/config.json, so subfolder is required.
     vae = ltx_vae_cls(diffusers).from_single_file(
-        args["checkpoint"], config=str(LTX_VAE_CONFIG), torch_dtype=dtype, local_files_only=True)
+        args["checkpoint"], config=str(LTX_VAE_CONFIG), subfolder="vae",
+        torch_dtype=dtype, local_files_only=True)
     name = "LTXImageToVideoPipeline" if image else "LTXPipeline"
     pipe_cls = getattr(diffusers, name, None)
     if pipe_cls is None:

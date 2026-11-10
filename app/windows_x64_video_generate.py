@@ -85,6 +85,29 @@ def ltx_transformer_cls(diffusers):
     return cls
 
 
+def missing_tokenizer_deps(import_module=None) -> list[str]:
+    """Packages the T5 tokenizer import needs. sentencepiece reads spiece.model and needs protobuf.
+    If that fails, transformers tries tiktoken."""
+    if import_module is None:
+        import importlib
+        import_module = importlib.import_module
+    missing = []
+    for module, label in (("sentencepiece", "sentencepiece"), ("google.protobuf", "protobuf"), ("tiktoken", "tiktoken")):
+        try:
+            import_module(module)
+        except ImportError:
+            missing.append(label)
+    return missing
+
+
+def require_tokenizer_deps(import_module=None) -> None:
+    missing = missing_tokenizer_deps(import_module)
+    if missing:
+        raise RuntimeError("The LTX tokenizer could not import " + ", ".join(missing)
+                           + ". Install them in the x64 GPU venv with "
+                           "scripts\\setup-windows-x64-video.ps1 -Model ltx. The weights stay put.")
+
+
 def ltx_single_file_args(root: Path) -> dict:
     """Where the distilled checkpoint and the transformer config actually sit.
 
@@ -121,6 +144,7 @@ def wan_folder_args(root: Path) -> dict:
 
 
 def load_ltx(root: Path, dtype, image: str | None):
+    require_tokenizer_deps()
     diffusers = diffusers_module()
     args = ltx_single_file_args(root)
     transformer = ltx_transformer_cls(diffusers).from_single_file(
@@ -134,6 +158,7 @@ def load_ltx(root: Path, dtype, image: str | None):
 
 
 def load_wan(root: Path, dtype):
+    require_tokenizer_deps()
     diffusers = diffusers_module()
     pipe_cls = getattr(diffusers, "WanPipeline", None)
     if pipe_cls is None:

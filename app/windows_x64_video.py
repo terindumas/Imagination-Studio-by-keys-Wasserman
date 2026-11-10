@@ -361,8 +361,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--download", action="store_true")
     parser.add_argument("--rollback", action="store_true")
     parser.add_argument("--rollback-plan", action="store_true")
+    parser.add_argument("--check-tokenizer", action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.check_tokenizer:
+            import windows_x64_video_generate as generate
+            generate.require_tokenizer_deps()
+            print("tokenizer dependencies import")
+            return 0
         if args.rollback or args.rollback_plan:
             print(json.dumps(rollback(args.model, dry=args.rollback_plan or not args.rollback)))
             return 0

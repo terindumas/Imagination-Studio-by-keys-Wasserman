@@ -163,6 +163,7 @@ def test_load_paths_match_the_downloaded_layout(tmp_path, monkeypatch):
         WanPipeline = WanPipe
 
     monkeypatch.setattr(windows_x64_video_generate, "diffusers_module", lambda: Diffusers)
+    monkeypatch.setattr(windows_x64_video_generate, "require_tokenizer_deps", lambda import_module=None: None)
     assert windows_x64_video_generate.load_ltx(ltx, "bf16", None) == "ltx-pipe"
     kind, path, kwargs = calls[0]
     assert kind == "single"
@@ -194,6 +195,18 @@ def test_ltx_loader_uses_the_transformer_class_not_automodel():
     assert "class LTXPipeline" in (root / "pipelines" / "ltx" / "pipeline_ltx.py").read_text(encoding="utf-8")
     assert "class LTXImageToVideoPipeline" in (root / "pipelines" / "ltx" / "pipeline_ltx_image2video.py").read_text(encoding="utf-8")
     assert "class WanPipeline" in (root / "pipelines" / "wan" / "pipeline_wan.py").read_text(encoding="utf-8")
+
+
+def test_tokenizer_preflight_names_protobuf_and_tiktoken():
+    def refuse(name):
+        raise ImportError(name)
+    assert windows_x64_video_generate.missing_tokenizer_deps(refuse) == ["sentencepiece", "protobuf", "tiktoken"]
+    requirements = (Path(__file__).resolve().parents[1] / "app" / "requirements-windows-x64.txt").read_text(encoding="utf-8")
+    assert "protobuf>=" in requirements and "tiktoken>=" in requirements and "sentencepiece>=" in requirements
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "setup-windows-x64-video.ps1").read_text(encoding="utf-8")
+    assert "Invoke-Python @($GpuPython) @('-m', 'pip', 'install', '-r', $Requirements)" in script
+    assert "& $GpuPython -m pip install" not in script
+    assert "--check-tokenizer" in script
 
 
 def test_missing_video_weights_name_the_installer_not_the_arm_venv(client, monkeypatch, tmp_path):

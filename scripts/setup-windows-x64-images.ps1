@@ -94,15 +94,15 @@ if (-not (Test-Path -LiteralPath $GpuPython)) {
   $code = Invoke-Python $Launcher @('-m', 'venv', $Venv)
   if ($code -ne 0) { throw 'Could not create the x64 GPU venv. Nothing was downloaded.' }
 }
-& $GpuPython -m pip install --upgrade pip
-if ($LASTEXITCODE -ne 0) { throw 'pip could not be upgraded in the x64 GPU venv.' }
+$code = Invoke-Python @($GpuPython) @('-m', 'pip', 'install', '--upgrade', 'pip')
+if ($code -ne 0) { throw 'pip could not be upgraded in the x64 GPU venv.' }
 # cu128 publishes a Windows AMD64 wheel for CPython 3.13. RTX 4090 (sm_89) runs that wheel.
-& $GpuPython -m pip install 'torch==2.9.1+cu128' torchvision --index-url https://download.pytorch.org/whl/cu128
-if ($LASTEXITCODE -ne 0) { throw 'The Windows x64 CUDA PyTorch wheel did not install. The model was not downloaded.' }
-& $GpuPython -m pip install -r $Requirements
-if ($LASTEXITCODE -ne 0) { throw 'diffusers and its dependencies did not install. The model was not downloaded.' }
-& $GpuPython -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"
-if ($LASTEXITCODE -ne 0) {
+$code = Invoke-Python @($GpuPython) @('-m', 'pip', 'install', 'torch==2.9.1+cu128', 'torchvision', '--index-url', 'https://download.pytorch.org/whl/cu128')
+if ($code -ne 0) { throw 'The Windows x64 CUDA PyTorch wheel did not install. The model was not downloaded.' }
+$code = Invoke-Python @($GpuPython) @('-m', 'pip', 'install', '-r', $Requirements)
+if ($code -ne 0) { throw 'diffusers and its dependencies did not install. The model was not downloaded.' }
+$code = Invoke-Python @($GpuPython) @('-c', 'import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)')
+if ($code -ne 0) {
   throw 'PyTorch imported but CUDA is not available. Check the NVIDIA driver. Weights were not downloaded. -Rollback removes this venv.'
 }
 if ($NoDownload) {

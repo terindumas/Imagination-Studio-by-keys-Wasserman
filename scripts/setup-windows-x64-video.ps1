@@ -82,8 +82,10 @@ if (-not (Test-Path -LiteralPath $GpuPython)) {
   & (Join-Path $PSScriptRoot 'setup-windows-x64-images.ps1') -NoDownload
   if ($LASTEXITCODE -ne 0) { throw 'The x64 GPU venv was not created. No video weights were downloaded.' }
 }
-& $GpuPython -m pip install -r $Requirements
-if ($LASTEXITCODE -ne 0) { throw 'The video Python packages did not install. No weights were downloaded.' }
+$code = Invoke-Python @($GpuPython) @('-m', 'pip', 'install', '-r', $Requirements)
+if ($code -ne 0) { throw 'The video Python packages did not install. No weights were downloaded.' }
+$code = Invoke-Python @($GpuPython) @('-X', 'utf8', $Helper, '--check-tokenizer')
+if ($code -ne 0) { throw 'The tokenizer packages did not import. No weights were downloaded.' }
 Invoke-Helper @($GpuPython) @('--download', '--model', $Model)
 Write-Host 'Windows x64 video weights are installed. Restart Studio, then open http://127.0.0.1:7870'
 Write-Host 'FastH3 and MiniMax H3 are not supported on a 16 GB GPU. The page offers LTX-Video or Wan 2.1 instead.'

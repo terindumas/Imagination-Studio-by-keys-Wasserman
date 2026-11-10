@@ -141,13 +141,17 @@ def test_load_paths_match_the_downloaded_layout(tmp_path, monkeypatch):
         @classmethod
         def from_pretrained(cls, path, **kwargs):
             calls.append(("ltx", path, kwargs))
-            return "ltx-pipe"
+            pipe = cls()
+            pipe.name = "ltx-pipe"
+            return pipe
 
     class ImagePipe:
         @classmethod
         def from_pretrained(cls, path, **kwargs):
             calls.append(("i2v", path, kwargs))
-            return "i2v-pipe"
+            pipe = cls()
+            pipe.name = "i2v-pipe"
+            return pipe
 
     class WanPipe:
         @classmethod
@@ -155,27 +159,53 @@ def test_load_paths_match_the_downloaded_layout(tmp_path, monkeypatch):
             calls.append(("wan", path, kwargs))
             return "wan-pipe"
 
+    class Vae:
+        @classmethod
+        def from_single_file(cls, path, **kwargs):
+            calls.append(("vae", path, kwargs))
+            return "vae-0.9.6"
+
+    class Scheduler:
+        def __init__(self, **kwargs):
+            calls.append(("scheduler", kwargs))
+            self.config = kwargs
+            self.sigmas = None
+
+        def set_timesteps(self, *args, device=None, sigmas=None, **kwargs):
+            self.sigmas = list(sigmas)
+
     class Diffusers:
         __version__ = "0.39.0"
         LTXVideoTransformer3DModel = Transformer
+        AutoencoderKLLTXVideo = Vae
+        FlowMatchEulerDiscreteScheduler = Scheduler
         LTXPipeline = TextPipe
         LTXImageToVideoPipeline = ImagePipe
         WanPipeline = WanPipe
 
     monkeypatch.setattr(windows_x64_video_generate, "diffusers_module", lambda: Diffusers)
     monkeypatch.setattr(windows_x64_video_generate, "require_tokenizer_deps", lambda import_module=None: None)
-    assert windows_x64_video_generate.load_ltx(ltx, "bf16", None) == "ltx-pipe"
+    pipe = windows_x64_video_generate.load_ltx(ltx, "bf16", None)
+    assert pipe.name == "ltx-pipe"
     kind, path, kwargs = calls[0]
     assert kind == "single"
     assert Path(path) == ltx / "ltxv-2b-0.9.6-distilled-04-25.safetensors"
     assert Path(kwargs["config"]) == ltx and kwargs["subfolder"] == "transformer"
     assert (Path(kwargs["config"]) / kwargs["subfolder"] / "config.json").is_file()
     assert kwargs["local_files_only"] is True
-    pipe_path, pipe_kwargs = calls[1][1], calls[1][2]
+    assert calls[1][0] == "vae"
+    assert Path(calls[1][1]) == ltx / "ltxv-2b-0.9.6-distilled-04-25.safetensors"
+    assert Path(calls[1][2]["config"]) == windows_x64_video_generate.LTX_VAE_CONFIG
+    assert calls[1][2]["local_files_only"] is True
+    assert "subfolder" not in calls[1][2]
+    pipe_path, pipe_kwargs = calls[2][1], calls[2][2]
     assert Path(pipe_path) == ltx and pipe_kwargs["transformer"] == "transformer"
+    assert pipe_kwargs["vae"] == "vae-0.9.6"
     assert pipe_kwargs["local_files_only"] is True
-    assert windows_x64_video_generate.load_ltx(ltx, "bf16", "frame.png") == "i2v-pipe"
-    assert calls[-1][0] == "i2v" and calls[-1][2]["transformer"] == "transformer"
+    assert calls[3][0] == "scheduler" and calls[3][1]["stochastic_sampling"] is True
+    assert calls[3][1]["use_dynamic_shifting"] is False
+    assert windows_x64_video_generate.load_ltx(ltx, "bf16", "frame.png").name == "i2v-pipe"
+    assert calls[-2][0] == "i2v" and calls[-2][2]["vae"] == "vae-0.9.6"
     assert windows_x64_video_generate.load_wan(wan, "bf16") == "wan-pipe"
     assert Path(calls[-1][1]) == wan and calls[-1][2]["local_files_only"] is True
     assert "transformer" not in calls[-1][2]
@@ -185,16 +215,40 @@ def test_ltx_loader_uses_the_transformer_class_not_automodel():
     source = Path(windows_x64_video_generate.__file__).read_text(encoding="utf-8")
     assert "AutoModel.from_single_file" not in source
     assert "LTXVideoTransformer3DModel.from_single_file" in source
+    assert "AutoencoderKLLTXVideo.from_single_file" in source
     assert "LTXImageToVideoPipeline" in source
     diffusers = pytest.importorskip("diffusers")
     root = Path(diffusers.__file__).resolve().parent
     parts = [int(piece) for piece in diffusers.__version__.split(".") if piece.isdigit()]
     assert tuple(parts[:2]) >= (0, 36)
     single = (root / "loaders" / "single_file_model.py").read_text(encoding="utf-8")
-    assert "LTXVideoTransformer3DModel" in single and "def from_single_file" in single
+    assert "LTXVideoTransformer3DModel" in single and "AutoencoderKLLTXVideo" in single and "def from_single_file" in single
     assert "class LTXPipeline" in (root / "pipelines" / "ltx" / "pipeline_ltx.py").read_text(encoding="utf-8")
     assert "class LTXImageToVideoPipeline" in (root / "pipelines" / "ltx" / "pipeline_ltx_image2video.py").read_text(encoding="utf-8")
     assert "class WanPipeline" in (root / "pipelines" / "wan" / "pipeline_wan.py").read_text(encoding="utf-8")
+
+
+def test_distilled_schedule_ignores_the_uniform_linspace():
+    class FakeScheduler:
+        def __init__(self, **kwargs):
+            self.config = type("Config", (), kwargs)()
+            self.applied = None
+
+        def set_timesteps(self, *args, device=None, sigmas=None, **kwargs):
+            self.applied = (list(sigmas), kwargs.get("mu"), device)
+
+    scheduler = windows_x64_video_generate.distilled_scheduler(FakeScheduler)
+    scheduler.set_timesteps(sigmas=[1.0, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125], mu=1.4)
+    assert scheduler.applied[0] == list(windows_x64_video_generate.LTX_DISTILLED_SIGMAS)
+    assert scheduler.applied[1] is None
+    assert scheduler.config.stochastic_sampling is True
+    assert scheduler.config.use_dynamic_shifting is False
+    assert scheduler.config.shift == 1.0
+    config = json.loads((windows_x64_video_generate.LTX_VAE_CONFIG / "vae" / "config.json").read_text(encoding="utf-8"))
+    assert config["timestep_conditioning"] is True
+    assert config["block_out_channels"][-1] == 2048
+    assert config["spatial_compression_ratio"] == 32
+    assert config["temporal_compression_ratio"] == 8
 
 
 def test_tokenizer_preflight_names_protobuf_and_tiktoken():

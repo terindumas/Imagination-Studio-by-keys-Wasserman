@@ -34,7 +34,7 @@ VRAM_NEED_MB = {"ltx": 8192, "wan13": 8192}
 MODELS: dict[str, dict] = {
     "ltx": {
         "title": "LTX-Video 2B",
-        "note": "Distilled 2B, 8 steps, 768×512, 97 frames at 24 fps. Text to video, or from one picture. LTXV Open Weights License.",
+        "note": "Distilled 2B, 8 steps, 768×512, 97 frames at 24 fps. Text to video, or from one picture. The VAE is read from the distilled file. LTXV Open Weights License.",
         "repo": "Lightricks/LTX-Video",
         "kind": "ltx",
         "license": "LTXV Open Weights License 0.X",

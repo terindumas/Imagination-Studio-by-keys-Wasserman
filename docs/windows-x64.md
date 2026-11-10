@@ -65,7 +65,9 @@ powershell -ExecutionPolicy Bypass -File scripts\setup-windows-x64-video.ps1 -Mo
 `-Model wan13` installs Wan 2.1 instead. The script reuses the x64 GPU venv from the stills installer.
 `-Rollback` deletes only `x64\models\ltx` or `x64\models\wan13`. Stills and the venv stay.
 
-LTX-Video is about **27 GB** (T5 text encoder, VAE, and `ltxv-2b-0.9.6-distilled`). Wan 2.1 1.3B is about **29 GB**.
+LTX-Video is about **27 GB** (T5 text encoder, the 0.9.0 folder files, and `ltxv-2b-0.9.6-distilled`).
+The distilled file already holds the matching timestep-conditioned VAE, so a later setup run does not download another VAE.
+Wan 2.1 1.3B is about **29 GB**.
 Neither download needs a Hugging Face token. LTX-Video’s licence asks a business at or above 10 million USD a year
 to get Lightricks’ commercial licence. Wan 2.1 is Apache-2.0.
 

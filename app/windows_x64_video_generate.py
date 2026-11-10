@@ -28,8 +28,11 @@ def load_request(path: Path) -> dict:
     return data
 
 
-def place(pipe, free_bytes: int):
-    """Keep the text encoder off a 16 GB card. A larger free pool can hold the pipeline."""
+def place(pipe, free_bytes: int, *, tile: bool = True):
+    """Keep the text encoder off a 16 GB card. A larger free pool can hold the pipeline.
+
+    LTX decode is not tiled: a 768×512 latent is small, and tiling draws a grid.
+    """
     import torch
     if free_bytes >= stills.FULL_GPU_BYTES:
         pipe.to("cuda")
@@ -42,7 +45,7 @@ def place(pipe, free_bytes: int):
         apply_group_offloading(pipe.text_encoder, onload_device=onload, offload_device=offload,
                                offload_type="block_level", num_blocks_per_group=2)
         apply_group_offloading(pipe.vae, onload_device=onload, offload_device=offload, offload_type="leaf_level")
-        if hasattr(pipe.vae, "enable_tiling"):
+        if tile and hasattr(pipe.vae, "enable_tiling"):
             pipe.vae.enable_tiling()
         return "group-offload"
     except (AttributeError, ImportError, TypeError, RuntimeError):
@@ -69,6 +72,16 @@ def diffusers_module():
         raise RuntimeError(f"diffusers {diffusers.__version__} is too old for LTX-Video. "
                            "The x64 GPU venv needs diffusers 0.36 or newer.")
     return diffusers
+
+
+# The distilled checkpoint's own sampler. Linear-quadratic, eight steps, no resolution shift.
+# Rounded in the file metadata as 1, 0.9937, 0.9875, 0.9812, 0.975, 0.9094, 0.725, 0.4219.
+LTX_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875)
+LTX_DECODE_TIMESTEP = 0.05
+LTX_DECODE_NOISE_SCALE = 0.025
+# Diffusers config for the timestep-conditioned 0.9.5/0.9.6 VAE. The weights are inside the
+# distilled safetensors. The vae/ folder of Lightricks/LTX-Video is the 0.9.0 decoder.
+LTX_VAE_CONFIG = Path(__file__).resolve().parent / "ltx" / "vae-0.9.6"
 
 
 def ltx_transformer_cls(diffusers):
@@ -108,12 +121,52 @@ def require_tokenizer_deps(import_module=None) -> None:
                            "scripts\\setup-windows-x64-video.ps1 -Model ltx. The weights stay put.")
 
 
+def ltx_vae_cls(diffusers):
+    """The class that reads the VAE stored in the distilled safetensors."""
+    cls = getattr(diffusers, "AutoencoderKLLTXVideo", None)
+    if cls is None or not callable(getattr(cls, "from_single_file", None)):
+        version = getattr(diffusers, "__version__", "unknown")
+        raise RuntimeError(f"diffusers {version} has no AutoencoderKLLTXVideo.from_single_file. "
+                           "Install diffusers>=0.36 in the x64 GPU venv.")
+    return cls
+
+
+def distilled_scheduler(scheduler_cls):
+    """Eight unshifted sigmas, with the stochastic step the distilled config asks for.
+
+    LTXPipeline always passes a uniform linspace and, with the repo scheduler, a resolution
+    shift that ends near 0.1. This checkpoint only denoises the list in its metadata.
+    """
+    scheduler = scheduler_cls(num_train_timesteps=1000, shift=1.0, use_dynamic_shifting=False,
+                              stochastic_sampling=True)
+    original = scheduler.set_timesteps
+
+    def set_timesteps(*_args, device=None, **_kwargs):
+        return original(device=device, sigmas=list(LTX_DISTILLED_SIGMAS))
+
+    scheduler.set_timesteps = set_timesteps
+    return scheduler
+
+
+def bind_ltx_generator(pipe, generator) -> None:
+    """The distilled step adds noise. Use the job seed for that draw too."""
+    original = pipe.scheduler.step
+
+    def step(*args, **kwargs):
+        kwargs.setdefault("generator", generator)
+        return original(*args, **kwargs)
+
+    pipe.scheduler.step = step
+
+
 def ltx_single_file_args(root: Path) -> dict:
     """Where the distilled checkpoint and the transformer config actually sit.
 
     model_index.json is at the model root. config.json is at transformer/config.json.
     Passing the root alone makes diffusers look for config.json beside model_index.json.
     The subfolder is required: when config is set, this diffusers build does not add it.
+    The VAE is not the vae/ folder. That folder is the 0.9.0 decoder. The matching
+    timestep-conditioned VAE is inside the distilled safetensors.
     """
     root = Path(root)
     checkpoint = root / "ltxv-2b-0.9.6-distilled-04-25.safetensors"
@@ -150,11 +203,19 @@ def load_ltx(root: Path, dtype, image: str | None):
     transformer = ltx_transformer_cls(diffusers).from_single_file(
         args["checkpoint"], config=args["config"], subfolder=args["subfolder"],
         torch_dtype=dtype, local_files_only=True)
+    vae = ltx_vae_cls(diffusers).from_single_file(
+        args["checkpoint"], config=str(LTX_VAE_CONFIG), torch_dtype=dtype, local_files_only=True)
     name = "LTXImageToVideoPipeline" if image else "LTXPipeline"
     pipe_cls = getattr(diffusers, name, None)
     if pipe_cls is None:
         raise RuntimeError(f"diffusers {diffusers.__version__} has no {name}.")
-    return pipe_cls.from_pretrained(str(root), transformer=transformer, torch_dtype=dtype, local_files_only=True)
+    scheduler_cls = getattr(diffusers, "FlowMatchEulerDiscreteScheduler", None)
+    if scheduler_cls is None:
+        raise RuntimeError(f"diffusers {diffusers.__version__} has no FlowMatchEulerDiscreteScheduler.")
+    pipe = pipe_cls.from_pretrained(str(root), transformer=transformer, vae=vae, torch_dtype=dtype,
+                                    local_files_only=True)
+    pipe.scheduler = distilled_scheduler(scheduler_cls)
+    return pipe
 
 
 def load_wan(root: Path, dtype):
@@ -190,7 +251,7 @@ def generate(request: dict) -> Path:
         pipe = load_wan(root, dtype)
     if hasattr(pipe, "set_progress_bar_config"):
         pipe.set_progress_bar_config(disable=True)
-    how = place(pipe, free_bytes)
+    how = place(pipe, free_bytes, tile=spec["kind"] != "ltx")
     print(f"[tensorfold] stage 2/3 {how}", flush=True)
     generator = torch.Generator(device="cuda").manual_seed(int(request["seed"]))
     call = {"prompt": request["prompt"], "width": int(request["width"]), "height": int(request["height"]),
@@ -199,7 +260,11 @@ def generate(request: dict) -> Path:
             "callback_on_step_end": lambda _pipe, step, _timestep, kwargs, total=spec["steps"]: (
                 print(f"[tensorfold] step {step + 1}/{total}", flush=True) or kwargs)}
     if spec["kind"] == "ltx":
-        call.update(decode_timestep=0.05, decode_noise_scale=0.025)
+        bind_ltx_generator(pipe, generator)
+        call.update(decode_timestep=LTX_DECODE_TIMESTEP, decode_noise_scale=LTX_DECODE_NOISE_SCALE,
+                    frame_rate=int(request["fps"]))
+        print("[tensorfold] ltx vae single-file, sigmas "
+              + ",".join(f"{value:.4f}" for value in LTX_DISTILLED_SIGMAS), flush=True)
         if request.get("image"):
             from PIL import Image
             call["image"] = Image.open(request["image"]).convert("RGB")

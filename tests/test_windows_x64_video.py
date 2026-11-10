@@ -232,6 +232,8 @@ def test_ltx_loader_uses_the_transformer_class_not_automodel():
 
 
 def test_distilled_schedule_ignores_the_uniform_linspace():
+    import inspect
+
     class FakeScheduler:
         def __init__(self, **kwargs):
             self.config = type("Config", (), kwargs)()
@@ -241,6 +243,7 @@ def test_distilled_schedule_ignores_the_uniform_linspace():
             self.applied = (list(sigmas), kwargs.get("mu"), device)
 
     scheduler = windows_x64_video_generate.distilled_scheduler(FakeScheduler)
+    assert "sigmas" in inspect.signature(scheduler.set_timesteps).parameters
     scheduler.set_timesteps(sigmas=[1.0, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125], mu=1.4)
     assert scheduler.applied[0] == list(windows_x64_video_generate.LTX_DISTILLED_SIGMAS)
     assert scheduler.applied[1] is None
@@ -264,9 +267,12 @@ def test_tokenizer_preflight_names_protobuf_and_tiktoken():
     for name in ("setup-windows-x64-video.ps1", "setup-windows-x64-images.ps1"):
         script = (root / name).read_text(encoding="utf-8")
         assert "*> $log" not in script
+        assert "cmd.exe" not in script
+        assert "Start-Process " not in script
         assert "$ErrorActionPreference = 'Continue'" in script
-        assert "cmd.exe /d /s /c" in script
-        assert "$code = $LASTEXITCODE" in script
+        assert "RedirectStandardError = $true" in script
+        assert "CreateNoWindow = $true" in script
+        assert "return [int]$proc.ExitCode" in script
     video_script = (root / "setup-windows-x64-video.ps1").read_text(encoding="utf-8")
     assert "Invoke-Python @($GpuPython) @('-m', 'pip', 'install', '-r', $Requirements)" in video_script
     assert "& $GpuPython -m pip install" not in video_script

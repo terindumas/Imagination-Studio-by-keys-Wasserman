@@ -26,34 +26,48 @@ $Repo = Split-Path $PSScriptRoot -Parent
 $Helper = Join-Path $Repo 'app\windows_x64_setup.py'
 $Requirements = Join-Path $Repo 'app\requirements-windows-x64.txt'
 
+function Format-ProcessArg([string]$Text) {
+  # CommandLineToArgvW rules. Windows PowerShell 5.1 re-quotes a single argument string,
+  # and the cmd /s switch strips one quote (that ran ""py").
+  if ($Text -notmatch '[\s"]') { return $Text }
+  $escaped = $Text -replace '(\\*)"', '$1$1\"'
+  $escaped = $escaped -replace '(\\+)$', '$1$1'
+  return '"' + $escaped + '"'
+}
 function Invoke-Python([string[]]$Prefix, [string[]]$Arguments) {
-  # Windows PowerShell 5.1 turns redirected native stderr into a NativeCommandError when
-  # $ErrorActionPreference is Stop, even if the program exits 0. That preference variable
-  # for native commands exists only in PowerShell 7. cmd writes both streams to files.
-  # $LASTEXITCODE is the only failure signal.
+  # Windows PowerShell 5.1 turns a native stderr redirect into a terminating error while
+  # $ErrorActionPreference is Stop. The process is started with redirected streams and
+  # no window. Its ExitCode is the only failure signal. stderr is printed, not trusted.
   $preference = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  $stamp = [guid]::NewGuid().ToString()
-  $out = Join-Path $env:TEMP ("studio-x64-" + $stamp + ".out")
-  $err = Join-Path $env:TEMP ("studio-x64-" + $stamp + ".err")
   try {
-    $pieces = @()
-    foreach ($part in @($Prefix + $Arguments)) {
-      $pieces += '"' + ($part -replace '"', '""') + '"'
-    }
-    $inner = ($pieces -join ' ') + ' > "' + $out + '" 2> "' + $err + '"'
-    cmd.exe /d /s /c "`"$inner`""
-    $code = $LASTEXITCODE
-    foreach ($path in @($out, $err)) {
-      if (Test-Path -LiteralPath $path) {
-        Get-Content -LiteralPath $path -ErrorAction SilentlyContinue | Write-Host
-      }
-    }
-    if ($null -eq $code) { return 1 }
-    return [int]$code
+    $exe = $Prefix[0]
+    $command = Get-Command -Name $exe -ErrorAction SilentlyContinue
+    if ($command -and $command.Source) { $exe = $command.Source }
+    $argParts = @()
+    if ($Prefix.Length -gt 1) { $argParts += $Prefix[1..($Prefix.Length - 1)] }
+    if ($Arguments) { $argParts += $Arguments }
+    $quoted = foreach ($part in $argParts) { Format-ProcessArg ([string]$part) }
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = $exe
+    $info.Arguments = ($quoted -join ' ')
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $info
+    if (-not $proc.Start()) { return 1 }
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+    $proc.WaitForExit()
+    $stdout = $stdoutTask.Result
+    $stderr = $stderrTask.Result
+    if ($stdout) { Write-Host $stdout }
+    if ($stderr) { Write-Host $stderr }
+    return [int]$proc.ExitCode
   } finally {
     $ErrorActionPreference = $preference
-    Remove-Item -LiteralPath $out, $err -ErrorAction SilentlyContinue
   }
 }
 function Get-SetupPython {

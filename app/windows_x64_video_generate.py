@@ -141,7 +141,11 @@ def distilled_scheduler(scheduler_cls):
                               stochastic_sampling=True)
     original = scheduler.set_timesteps
 
-    def set_timesteps(*_args, device=None, **_kwargs):
+    def set_timesteps(num_inference_steps=None, device=None, sigmas=None, mu=None, timesteps=None):
+        # The name `sigmas` has to be a real parameter. LTXPipeline checks the signature
+        # and rejects the scheduler when it is only present as **kwargs. The linspace
+        # it passes is not the distilled schedule, so it is not forwarded.
+        del num_inference_steps, sigmas, mu, timesteps
         return original(device=device, sigmas=list(LTX_DISTILLED_SIGMAS))
 
     scheduler.set_timesteps = set_timesteps

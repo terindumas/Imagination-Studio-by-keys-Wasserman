@@ -2654,6 +2654,8 @@ def state() -> dict:
                                             "model": clip["model"], "models": clip["models"]}
             out["ref2va"] = False
             out["ref2va_turbo"] = False
+            out["qualities"] = dict(windows_x64_video.QUALITIES)
+            out["sharp"] = None
             if clip["available"]:
                 out["engine"] = clip["engine"] if not windows_x64_stills.status()["available"] else (
                     windows_x64_stills.status()["engine"].replace(" (Windows x64)", "") + " · " + clip["engine"])

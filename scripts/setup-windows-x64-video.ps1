@@ -18,6 +18,8 @@ param(
   [switch]$Rollback
 )
 $ErrorActionPreference = 'Stop'
+# tqdm and Hugging Face write progress to stderr. That is not a failed command.
+$PSNativeCommandUseErrorActionPreference = $false
 $Repo = Split-Path $PSScriptRoot -Parent
 $Helper = Join-Path $Repo 'app\windows_x64_video.py'
 $Requirements = Join-Path $Repo 'app\requirements-windows-x64.txt'
@@ -36,8 +38,20 @@ function Get-SetupPython {
   throw 'Python 3.13 is required (py -3.13). Nothing was downloaded.'
 }
 function Invoke-Python([string[]]$Prefix, [string[]]$Arguments) {
-  if ($Prefix.Length -gt 1) { & $Prefix[0] $Prefix[1] @Arguments } else { & $Prefix[0] @Arguments }
-  return $LASTEXITCODE
+  # A function's stdout is its return value. The helper's JSON must not be mixed into the exit code,
+  # and a pipeline would replace the native exit code, so the log goes to a file first.
+  $PSNativeCommandUseErrorActionPreference = $false
+  $log = Join-Path $env:TEMP ("studio-x64-" + [guid]::NewGuid().ToString() + ".log")
+  try {
+    if ($Prefix.Length -gt 1) { & $Prefix[0] $Prefix[1] @Arguments *> $log }
+    else { & $Prefix[0] @Arguments *> $log }
+    $code = $LASTEXITCODE
+    if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | Write-Host }
+    if ($null -eq $code) { return 1 }
+    return $code
+  } finally {
+    Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
+  }
 }
 function Invoke-Helper([string[]]$Prefix, [string[]]$HelperArgs) {
   $code = Invoke-Python $Prefix (@('-X', 'utf8', $Helper) + $HelperArgs)

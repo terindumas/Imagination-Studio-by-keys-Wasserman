@@ -19,6 +19,12 @@ AUTO = "ltx"
 SMALL_VRAM_MB = 24 * 1024
 H3_NOTE = ("MiniMax H3 and FastH3 are not supported on this GPU. They need about 58–90 GB. "
            "This PC uses LTX-Video 2B (or Wan 2.1 1.3B) instead.")
+# Shown in /api/state qualities on a card of 24 GB or less. Not the FastH3 pass labels.
+QUALITIES = {
+    "ltx": "LTX-Video 2B, 8 steps, 97 frames",
+    "ltx121": "LTX-Video 2B, 8 steps, 121 frames",
+    "wan13": "Wan 2.1 1.3B, 30 steps, 81 frames",
+}
 SETUP = r"powershell -ExecutionPolicy Bypass -File scripts\setup-windows-x64-video.ps1 -Model ltx"
 
 # Host is system RAM for the text encoder. VRAM is the free memory one block needs.

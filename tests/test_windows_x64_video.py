@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 import server
 import windows_x64_stills as stills
 import windows_x64_video as video
+import windows_x64_video_generate as windows_x64_video_generate
 from test_windows_ui import client  # noqa: F401
 
 
@@ -90,6 +91,8 @@ def test_api_hides_h3_and_queues_ltx_when_the_weights_exist(client, monkeypatch,
     assert "gpu-venv" not in state["capabilities"]["video"].get("why", "")
     assert state["capabilities"]["video"]["available"] is True
     assert state["capabilities"]["video"]["model"] == "ltx"
+    assert set(state["qualities"]) == {"ltx", "ltx121", "wan13"}
+    assert all("FastH3" not in label for label in state["qualities"].values())
     assert "LTX-Video" in state["engine"]
     response = client.post("/api/jobs", json={"kind": "video", "title": "apple", "params": {
         "prompt": "a red apple on a white table", "video_model": "ltx"}})
@@ -106,6 +109,22 @@ def test_api_hides_h3_and_queues_ltx_when_the_weights_exist(client, monkeypatch,
     monkeypatch.setattr(server, "SPARK", False)
     refused = server.job_fit({"kind": "video", "params": body["params"]})
     assert refused["fits"] is False and "sd-cuda.exe" in refused["reason"] and "28" not in refused["reason"]
+
+
+def test_ltx_loader_uses_the_transformer_class_not_automodel():
+    source = Path(windows_x64_video_generate.__file__).read_text(encoding="utf-8")
+    assert "AutoModel.from_single_file" not in source
+    assert "LTXVideoTransformer3DModel.from_single_file" in source
+    assert "LTXImageToVideoPipeline" in source
+    diffusers = pytest.importorskip("diffusers")
+    root = Path(diffusers.__file__).resolve().parent
+    parts = [int(piece) for piece in diffusers.__version__.split(".") if piece.isdigit()]
+    assert tuple(parts[:2]) >= (0, 36)
+    single = (root / "loaders" / "single_file_model.py").read_text(encoding="utf-8")
+    assert "LTXVideoTransformer3DModel" in single and "def from_single_file" in single
+    assert "class LTXPipeline" in (root / "pipelines" / "ltx" / "pipeline_ltx.py").read_text(encoding="utf-8")
+    assert "class LTXImageToVideoPipeline" in (root / "pipelines" / "ltx" / "pipeline_ltx_image2video.py").read_text(encoding="utf-8")
+    assert "class WanPipeline" in (root / "pipelines" / "wan" / "pipeline_wan.py").read_text(encoding="utf-8")
 
 
 def test_missing_video_weights_name_the_installer_not_the_arm_venv(client, monkeypatch, tmp_path):

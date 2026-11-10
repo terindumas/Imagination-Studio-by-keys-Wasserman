@@ -57,9 +57,56 @@ def write_mp4(frames, path: Path, fps: int) -> None:
     imageio.mimsave(str(path), arrays, fps=fps, codec="libx264", quality=8)
 
 
+def diffusers_module():
+    """diffusers 0.36 is the first release this loader is written against."""
+    import diffusers
+    parts = []
+    for piece in diffusers.__version__.split("."):
+        if not piece.isdigit():
+            break
+        parts.append(int(piece))
+    if tuple(parts[:2]) < (0, 36):
+        raise RuntimeError(f"diffusers {diffusers.__version__} is too old for LTX-Video. "
+                           "The x64 GPU venv needs diffusers 0.36 or newer.")
+    return diffusers
+
+
+def ltx_transformer_cls(diffusers):
+    """The class that reads ltxv-2b-0.9.6-distilled-04-25.safetensors.
+
+    The generic auto class does not provide this single-file loader on every
+    diffusers build. The LTX transformer class does, from 0.36 onward.
+    """
+    cls = getattr(diffusers, "LTXVideoTransformer3DModel", None)
+    if cls is None or not callable(getattr(cls, "from_single_file", None)):
+        version = getattr(diffusers, "__version__", "unknown")
+        raise RuntimeError(f"diffusers {version} has no LTXVideoTransformer3DModel.from_single_file. "
+                           "Install diffusers>=0.36 in the x64 GPU venv.")
+    return cls
+
+
+def load_ltx(root: Path, dtype, image: str | None):
+    diffusers = diffusers_module()
+    transformer = ltx_transformer_cls(diffusers).from_single_file(
+        str(root / "ltxv-2b-0.9.6-distilled-04-25.safetensors"),
+        config=str(root), torch_dtype=dtype, local_files_only=True)
+    name = "LTXImageToVideoPipeline" if image else "LTXPipeline"
+    pipe_cls = getattr(diffusers, name, None)
+    if pipe_cls is None:
+        raise RuntimeError(f"diffusers {diffusers.__version__} has no {name}.")
+    return pipe_cls.from_pretrained(str(root), transformer=transformer, torch_dtype=dtype, local_files_only=True)
+
+
+def load_wan(root: Path, dtype):
+    diffusers = diffusers_module()
+    pipe_cls = getattr(diffusers, "WanPipeline", None)
+    if pipe_cls is None:
+        raise RuntimeError(f"diffusers {diffusers.__version__} has no WanPipeline.")
+    return pipe_cls.from_pretrained(str(root), torch_dtype=dtype, local_files_only=True)
+
+
 def generate(request: dict) -> Path:
     import torch
-    from diffusers import AutoModel, LTXImageToVideoPipeline, LTXPipeline, WanPipeline
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available in the Windows x64 GPU environment.")
@@ -76,12 +123,9 @@ def generate(request: dict) -> Path:
         raise RuntimeError(said["reason"] or "not enough free GPU memory")
     dtype = torch.bfloat16
     if spec["kind"] == "ltx":
-        distilled = root / "ltxv-2b-0.9.6-distilled-04-25.safetensors"
-        transformer = AutoModel.from_single_file(str(distilled), torch_dtype=dtype, local_files_only=True)
-        cls = LTXImageToVideoPipeline if request.get("image") else LTXPipeline
-        pipe = cls.from_pretrained(str(root), transformer=transformer, torch_dtype=dtype, local_files_only=True)
+        pipe = load_ltx(root, dtype, request.get("image"))
     else:
-        pipe = WanPipeline.from_pretrained(str(root), torch_dtype=dtype, local_files_only=True)
+        pipe = load_wan(root, dtype)
     if hasattr(pipe, "set_progress_bar_config"):
         pipe.set_progress_bar_config(disable=True)
     how = place(pipe, free_bytes)

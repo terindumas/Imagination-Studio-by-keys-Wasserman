@@ -1,7 +1,8 @@
 # The Windows x64 GPU venv, after the CUDA torch wheel.
 # Torch itself comes from https://download.pytorch.org/whl/cu128 (see setup-windows-x64-images.ps1),
 # pinned there as torch==2.9.1+cu128 because that index publishes a Windows AMD64 wheel for Python 3.13.
-# These packages are ordinary PyPI builds. diffusers 0.36 is the first release with ZImagePipeline.
+# These packages are ordinary PyPI builds. diffusers 0.36 is the first release with ZImagePipeline
+# and with LTXVideoTransformer3DModel.from_single_file (AutoModel.from_single_file is not that loader).
 diffusers>=0.36.0
 transformers>=4.46.0
 accelerate>=1.1.0

@@ -111,6 +111,75 @@ def test_api_hides_h3_and_queues_ltx_when_the_weights_exist(client, monkeypatch,
     assert refused["fits"] is False and "sd-cuda.exe" in refused["reason"] and "28" not in refused["reason"]
 
 
+def _touch(root: Path, names: tuple[str, ...]) -> None:
+    for name in names:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"{}")
+
+
+def test_load_paths_match_the_downloaded_layout(tmp_path, monkeypatch):
+    ltx = tmp_path / "ltx"
+    _touch(ltx, ("model_index.json", "scheduler/scheduler_config.json", "text_encoder/config.json",
+                 "text_encoder/model.safetensors.index.json", "tokenizer/tokenizer_config.json",
+                 "tokenizer/spiece.model", "transformer/config.json", "vae/config.json",
+                 "vae/diffusion_pytorch_model.safetensors", "ltxv-2b-0.9.6-distilled-04-25.safetensors"))
+    wan = tmp_path / "wan13"
+    _touch(wan, ("model_index.json", "scheduler/scheduler_config.json", "text_encoder/config.json",
+                 "text_encoder/model.safetensors.index.json", "tokenizer/tokenizer_config.json",
+                 "transformer/config.json", "transformer/diffusion_pytorch_model.safetensors.index.json",
+                 "vae/config.json", "vae/diffusion_pytorch_model.safetensors"))
+    calls = []
+
+    class Transformer:
+        @classmethod
+        def from_single_file(cls, path, **kwargs):
+            calls.append(("single", path, kwargs))
+            return "transformer"
+
+    class TextPipe:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            calls.append(("ltx", path, kwargs))
+            return "ltx-pipe"
+
+    class ImagePipe:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            calls.append(("i2v", path, kwargs))
+            return "i2v-pipe"
+
+    class WanPipe:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            calls.append(("wan", path, kwargs))
+            return "wan-pipe"
+
+    class Diffusers:
+        __version__ = "0.39.0"
+        LTXVideoTransformer3DModel = Transformer
+        LTXPipeline = TextPipe
+        LTXImageToVideoPipeline = ImagePipe
+        WanPipeline = WanPipe
+
+    monkeypatch.setattr(windows_x64_video_generate, "diffusers_module", lambda: Diffusers)
+    assert windows_x64_video_generate.load_ltx(ltx, "bf16", None) == "ltx-pipe"
+    kind, path, kwargs = calls[0]
+    assert kind == "single"
+    assert Path(path) == ltx / "ltxv-2b-0.9.6-distilled-04-25.safetensors"
+    assert Path(kwargs["config"]) == ltx and kwargs["subfolder"] == "transformer"
+    assert (Path(kwargs["config"]) / kwargs["subfolder"] / "config.json").is_file()
+    assert kwargs["local_files_only"] is True
+    pipe_path, pipe_kwargs = calls[1][1], calls[1][2]
+    assert Path(pipe_path) == ltx and pipe_kwargs["transformer"] == "transformer"
+    assert pipe_kwargs["local_files_only"] is True
+    assert windows_x64_video_generate.load_ltx(ltx, "bf16", "frame.png") == "i2v-pipe"
+    assert calls[-1][0] == "i2v" and calls[-1][2]["transformer"] == "transformer"
+    assert windows_x64_video_generate.load_wan(wan, "bf16") == "wan-pipe"
+    assert Path(calls[-1][1]) == wan and calls[-1][2]["local_files_only"] is True
+    assert "transformer" not in calls[-1][2]
+
+
 def test_ltx_loader_uses_the_transformer_class_not_automodel():
     source = Path(windows_x64_video_generate.__file__).read_text(encoding="utf-8")
     assert "AutoModel.from_single_file" not in source

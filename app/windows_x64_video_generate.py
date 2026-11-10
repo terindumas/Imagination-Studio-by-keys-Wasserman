@@ -85,11 +85,47 @@ def ltx_transformer_cls(diffusers):
     return cls
 
 
+def ltx_single_file_args(root: Path) -> dict:
+    """Where the distilled checkpoint and the transformer config actually sit.
+
+    model_index.json is at the model root. config.json is at transformer/config.json.
+    Passing the root alone makes diffusers look for config.json beside model_index.json.
+    The subfolder is required: when config is set, this diffusers build does not add it.
+    """
+    root = Path(root)
+    checkpoint = root / "ltxv-2b-0.9.6-distilled-04-25.safetensors"
+    config_dir = root / "transformer"
+    missing = [str(path) for path in (checkpoint, root / "model_index.json", config_dir / "config.json",
+                                      root / "vae" / "config.json", root / "vae" / "diffusion_pytorch_model.safetensors",
+                                      root / "text_encoder" / "config.json",
+                                      root / "text_encoder" / "model.safetensors.index.json",
+                                      root / "tokenizer" / "tokenizer_config.json",
+                                      root / "scheduler" / "scheduler_config.json") if not path.is_file()]
+    if missing:
+        raise RuntimeError("LTX-Video is missing files the loader reads: " + ", ".join(missing))
+    return {"checkpoint": str(checkpoint), "config": str(root), "subfolder": "transformer"}
+
+
+def wan_folder_args(root: Path) -> dict:
+    """Wan is a full diffusers folder: every component config lives in its subfolder."""
+    root = Path(root)
+    needed = (root / "model_index.json", root / "scheduler" / "scheduler_config.json",
+              root / "text_encoder" / "config.json", root / "text_encoder" / "model.safetensors.index.json",
+              root / "tokenizer" / "tokenizer_config.json", root / "transformer" / "config.json",
+              root / "transformer" / "diffusion_pytorch_model.safetensors.index.json",
+              root / "vae" / "config.json", root / "vae" / "diffusion_pytorch_model.safetensors")
+    missing = [str(path) for path in needed if not path.is_file()]
+    if missing:
+        raise RuntimeError("Wan 2.1 is missing files the loader reads: " + ", ".join(missing))
+    return {"pretrained": str(root)}
+
+
 def load_ltx(root: Path, dtype, image: str | None):
     diffusers = diffusers_module()
+    args = ltx_single_file_args(root)
     transformer = ltx_transformer_cls(diffusers).from_single_file(
-        str(root / "ltxv-2b-0.9.6-distilled-04-25.safetensors"),
-        config=str(root), torch_dtype=dtype, local_files_only=True)
+        args["checkpoint"], config=args["config"], subfolder=args["subfolder"],
+        torch_dtype=dtype, local_files_only=True)
     name = "LTXImageToVideoPipeline" if image else "LTXPipeline"
     pipe_cls = getattr(diffusers, name, None)
     if pipe_cls is None:
@@ -102,6 +138,7 @@ def load_wan(root: Path, dtype):
     pipe_cls = getattr(diffusers, "WanPipeline", None)
     if pipe_cls is None:
         raise RuntimeError(f"diffusers {diffusers.__version__} has no WanPipeline.")
+    wan_folder_args(root)
     return pipe_cls.from_pretrained(str(root), torch_dtype=dtype, local_files_only=True)
 
 

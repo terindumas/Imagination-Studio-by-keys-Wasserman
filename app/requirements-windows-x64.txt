@@ -2,7 +2,8 @@
 # Torch itself comes from https://download.pytorch.org/whl/cu128 (see setup-windows-x64-images.ps1),
 # pinned there as torch==2.9.1+cu128 because that index publishes a Windows AMD64 wheel for Python 3.13.
 # These packages are ordinary PyPI builds. diffusers 0.36 is the first release with ZImagePipeline
-# and with LTXVideoTransformer3DModel.from_single_file (AutoModel.from_single_file is not that loader).
+# and with LTXVideoTransformer3DModel.from_single_file. The transformer config is transformer/config.json,
+# so that call passes subfolder="transformer". sentencepiece is what LTX's T5Tokenizer reads.
 diffusers>=0.36.0
 transformers>=4.46.0
 accelerate>=1.1.0
@@ -11,3 +12,4 @@ huggingface_hub>=0.26.0
 pillow>=10.4.0
 imageio>=2.35.0
 imageio-ffmpeg>=0.5.1
+sentencepiece>=0.2.0

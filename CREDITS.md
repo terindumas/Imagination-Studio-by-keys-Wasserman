@@ -499,8 +499,17 @@ built from the file's header, that the studio now makes itself.
   Converter links on Windows. **VideoLAN and the x264 contributors** supply its H.264 encoder.
 - **OpenAI** — **Whisper**, and **SYSTRAN** — **faster-whisper**: the QA gate's and Voice's check of the spoken words.
 - **yt-dlp** contributors — Motion Previs reading a shot from a link.
+- **Tongyi-MAI (Z-Image team)** — **Z-Image-Turbo** (Apache-2.0), the default stills model on Windows x64
+  with a discrete NVIDIA GPU. The weights stay on the machine that downloads them; this repo does not ship them.
+- **Lykon** — **DreamShaper 8** (CreativeML OpenRAIL-M), the smaller SD1.5-class stills model on that same path.
+  The Windows x64 installer downloads its fp16 safetensors and does not download or load the safety checker.
+- **Lightricks** — **LTX-Video 2B distilled** (LTXV Open Weights License 0.X), the short-video model for a 16 GB
+  Windows x64 GPU. A business with 10 million USD or more a year needs Lightricks' commercial licence. The weights
+  are not in this repo.
+- **Wan-AI** — **Wan 2.1 T2V 1.3B** (Apache-2.0), the other short-video choice on that GPU.
 - **PyTorch**; **Hugging Face** — **diffusers**, **transformers** and **huggingface_hub**; **Patrick Kidger** and
-  **Xuechen Li** — **torchsde**.
+  **Xuechen Li** — **torchsde**. The Windows x64 stills path uses PyTorch's Windows AMD64 CUDA wheel and diffusers'
+  Z-Image and Stable Diffusion pipelines.
 - **Comfy Org** — **ComfyUI**, which every render on a DGX Spark runs through.
 - **Jakob Unterwurzacher** — **earlyoom**, and the **systemd** contributors — **systemd-oomd**: the idea of acting on
   memory pressure in user space before the kernel's OOM killer, which the machine memory guard

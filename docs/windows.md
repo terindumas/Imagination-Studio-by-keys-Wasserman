@@ -15,6 +15,12 @@ H3 video retains its own engine and pool prerequisites; it does not gate unrelat
 Native CUDA setup currently targets **Windows 11 on Arm / RTX Spark N1X**. The UI environment can run without
 the CUDA engine installation; that does not make an arbitrary Windows GPU supported.
 
+**Windows 11 x64 with a discrete NVIDIA GPU** (16 GB class, such as a laptop RTX 4090) has a separate stills
+installer, `scripts\setup-windows-x64-images.ps1`. It installs a Python 3.13 CUDA venv and a public
+safetensors model under `%LOCALAPPDATA%\ImaginationStudio\x64`, and it leaves the Arm installer unchanged.
+See [Windows x64 stills](windows-x64.md). H3 video, Qwen-Image, FLUX3-K, Drama 3 and Music 3 are not part of
+that install: they do not fit 16 GB.
+
 ### Install from the web
 
 For a new install, run in an administrator PowerShell:

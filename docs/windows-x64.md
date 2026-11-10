@@ -16,7 +16,9 @@ bind 8080 or 1420 and does not touch another drive.
 | **Z-Image-Turbo** stills (default) | Yes. Apache-2.0, public safetensors, no Hugging Face account. About 33 GB on disk. The transformer is about 12 GB in bf16, so a 16 GB card keeps the text encoder in system RAM and runs one part at a time. 1024×1024, and 1344×768, fit the pixel cap. |
 | **DreamShaper 8** stills (`-Model sd15`) | Yes. CreativeML OpenRAIL-M, fp16 safetensors, about 2.5 GB. 512 to 768 on a side. No safety checker is downloaded or loaded. |
 | Qwen-Image-2.1, FLUX3-K, MOSS-Image | No. Those weights and the Arm ComfyUI recipe are far past 16 GB. |
-| MiniMax H3 / FastH3 video | No. The int8 engine's measured pool requirement is 90 GB; a short 480p clip already peaks near 58 GB. |
+| **LTX-Video 2B** short clips | Yes, with the text encoder in system RAM. About 27 GB of safetensors. 768×512, 97 frames, 24 fps, 8 steps. Can start from one picture. Silent. |
+| **Wan 2.1 1.3B** short clips | Yes, the same way. About 29 GB. Text only, 81 frames. Apache-2.0. |
+| MiniMax H3 / FastH3 video | No. The int8 engine's measured pool requirement is 90 GB; a short 480p clip already peaks near 58 GB. A card of 24 GB or less is told that plainly. The page offers LTX-Video instead. |
 | Fish Audio Drama 3, MiniMax Music 3 | No. Drama 3 is about 42 GB on a Spark. They are not installed by this script. |
 | TensorFold H3 | Not used here. The page can still report it unavailable. That is accurate on this GPU. |
 
@@ -48,6 +50,47 @@ Disk, roughly:
 - DreamShaper 8: 2.5 GB
 - Auto (venv + Z-Image-Turbo): about 37 GB
 - Both models: about 40 GB
+
+## Short video
+
+FastH3 and MiniMax H3 stay hidden on a Windows x64 GPU of 24 GB or less. The message is
+“not supported on this GPU”, not a missing Arm venv path.
+
+```powershell
+cd C:\ImaginationStudio
+powershell -ExecutionPolicy Bypass -File scripts\setup-windows-x64-video.ps1 -Model ltx -PlanOnly
+powershell -ExecutionPolicy Bypass -File scripts\setup-windows-x64-video.ps1 -Model ltx
+```
+
+`-Model wan13` installs Wan 2.1 instead. The script reuses the x64 GPU venv from the stills installer.
+`-Rollback` deletes only `x64\models\ltx` or `x64\models\wan13`. Stills and the venv stay.
+
+LTX-Video is about **27 GB** (T5 text encoder, VAE, and `ltxv-2b-0.9.6-distilled`). Wan 2.1 1.3B is about **29 GB**.
+Neither download needs a Hugging Face token. LTX-Video’s licence asks a business at or above 10 million USD a year
+to get Lightricks’ commercial licence. Wan 2.1 is Apache-2.0.
+
+Admission wants about **24 GB of free system RAM** and about **8 GB of free GPU memory**. A short GPU names the
+program holding it. Restart Studio, open Create, and queue a clip. The engine row is LTX-Video 2B or Wan 2.1 1.3B.
+Or, with Studio already running:
+
+```powershell
+$body = @{
+  kind = "video"
+  title = "apple"
+  params = @{
+    prompt = "a red apple on a white table"
+    video_model = "ltx"
+    width = 768
+    height = 512
+    frames = 97
+    fps = 24
+    seed = 1
+  }
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:7870/api/jobs -ContentType "application/json" -Body $body
+```
+
+The mp4 is `renders\<job id>.mp4` under the Studio home. The first run loads the text encoder. The clip has no sound.
 
 ## Launch and a generation test
 

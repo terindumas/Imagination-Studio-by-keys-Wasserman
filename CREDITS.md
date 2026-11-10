@@ -503,6 +503,10 @@ built from the file's header, that the studio now makes itself.
   with a discrete NVIDIA GPU. The weights stay on the machine that downloads them; this repo does not ship them.
 - **Lykon** — **DreamShaper 8** (CreativeML OpenRAIL-M), the smaller SD1.5-class stills model on that same path.
   The Windows x64 installer downloads its fp16 safetensors and does not download or load the safety checker.
+- **Lightricks** — **LTX-Video 2B distilled** (LTXV Open Weights License 0.X), the short-video model for a 16 GB
+  Windows x64 GPU. A business with 10 million USD or more a year needs Lightricks' commercial licence. The weights
+  are not in this repo.
+- **Wan-AI** — **Wan 2.1 T2V 1.3B** (Apache-2.0), the other short-video choice on that GPU.
 - **PyTorch**; **Hugging Face** — **diffusers**, **transformers** and **huggingface_hub**; **Patrick Kidger** and
   **Xuechen Li** — **torchsde**. The Windows x64 stills path uses PyTorch's Windows AMD64 CUDA wheel and diffusers'
   Z-Image and Stable Diffusion pipelines.

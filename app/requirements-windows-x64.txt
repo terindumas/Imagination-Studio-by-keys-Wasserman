@@ -8,3 +8,5 @@ accelerate>=1.1.0
 safetensors>=0.4.5
 huggingface_hub>=0.26.0
 pillow>=10.4.0
+imageio>=2.35.0
+imageio-ffmpeg>=0.5.1

@@ -446,7 +446,18 @@ function loraHub(obj, save = () => {}, redraw = render) { if (!obj.loras) obj.lo
     failed.filter(r => !HUB.browse).map(r => el("div", { class: "note", style: "color:var(--bad)" }, r.name + ": " + r.installing.error)),
     browser, obj.loras.map(row), form,
     obj.loras.length ? el("div", { class: "note" }, S.platform !== "spark" ? "With a LoRA, FastH3 renders on the MLX engine, not the native one: slower, and no time estimate. MiniMax H3 at 20 steps is what most LoRAs were made for." : (typeof cardFace === "function" && cardFace() ? "With a LoRA, FastH3 merges it into TensorFold's int8 engine. An engine here that predates 2.7.1 renders it on ComfyUI's own blocks: slower, and at most 1280 × 736 at 124 frames. No time estimate either way." : "With a LoRA, FastH3 merges it into TensorFold's int8 engine. A Spark whose engine predates 2.7.1 renders it on ComfyUI's own blocks: slower, and at most 1280 × 736 at 124 frames. No time estimate either way.")) : null); }
+function x64Video() { return S.x64_video && S.x64_video.small; }
 function videoControls(after) {
+  if (x64Video()) {
+    const models = S.x64_video.models && S.x64_video.models.length ? S.x64_video.models : ["ltx", "wan13"];
+    if (!models.includes(C.x64Video)) C.x64Video = S.x64_video.model || models[0];
+    const labels = { ltx: ["LTX-Video 2B", "8 steps, can start from a picture"], wan13: ["Wan 2.1 1.3B", "text only, 81 frames"] };
+    return el("div", { class: "group" },
+      el("div", { class: "note" }, S.x64_video.h3_note || "MiniMax H3 and FastH3 are not supported on this GPU."),
+      el("label", {}, "Video engine"),
+      choice(C, "x64Video", Object.fromEntries(models.map(id => [id, labels[id] || [id, ""]])), after, true),
+      el("div", { class: "note" }, "768 × 512 at 24 fps. LTX-Video is 97 frames. Wan is 81 frames and does not take a picture. The clip has no sound track."));
+  }
   const two = bind(C, "up", el("input", { type: "checkbox", disabled: !UPSCALED[C.res] }), changed);
   return el("div", { class: "group" },
     S.sharp ? el("div", { class: "row" }, sharpButton(sharpOn(), sharpCreate), el("div", { class: "note" }, sharpOn() ? "On: 1376 × 768, FastH3 8 passes, one pass, no upscale. Seed " + C.seed + (Number(C.seed) === S.sharp.seed ? "" : " (the spec starts at " + S.sharp.seed + "; the next seed is a retake)") + ". His QA gate checks each clip: the spoken line by transcript, then three frames by a vision model (Claude Code, Codex or a local model, under your own sign-in). A clip that fails is made once more at the next seed."
@@ -752,7 +763,14 @@ function viewCreate() {
         bind(C, "retake", el("input", { type: "checkbox", style: "width:auto" })), "If the shot check fails (a keyframe not held, or a cut inside the shot), render it once more at the next seed. That is a second full render."),
       // how many Sparks this job may use, and what that means for it, before it is queued (sparks.js)
       el("div", { style: "margin-top:10px" }, sparksPick({ kind: isLong() ? "long" : "video", clips: 1, params: { loras: lorasOf(C), ...(isRef() ? { references: C.refs, reference_videos: C.refVideos, reference_audios: C.refAudios, ref_turbo: C.refPasses === "4" } : {}), ...(encoderOf() ? { text_encoder: encoderOf() } : {}) } })),
-      el("div", { class: "row", style: "margin-top:10px" }, el("button", { class: "hot fit", disabled: !ready, onclick: async () => { try {
+      el("div", { class: "row", style: "margin-top:10px" }, el("button", { class: "hot fit", disabled: x64Video() ? !(C.prompt || C.scene || C.action || "").trim() : !ready, onclick: async () => { try {
+        if (x64Video()) {
+          const prompt = (C.prompt || C.scene || C.action || "").trim();
+          if (!prompt) throw new Error("describe the clip first");
+          const model = C.x64Video || "ltx";
+          const j = await api("/api/jobs", { kind: "video", title: prompt.slice(0, 48), params: { prompt, video_model: model, width: 768, height: 512, frames: model === "wan13" ? 81 : 97, fps: 24, seed: Number(C.seed) || 1, ...(noFrame() || !C.image || model === "wan13" ? {} : { image: C.image }) } });
+          C.job = j.id; await poll(); render(); return;
+        }
         const base = { prompt: C.prompt, image: noFrame() ? null : C.image, ...(typeof prefs === "function" && !prefs().presets.qa_gate ? { qa: false } : {}), ...(lastOf() ? { last_image: lastOf() } : {}), preset: C.preset, quality: C.quality, seed: C.seed, ...extras(), ...(isRef() ? { references: C.refs, ref_turbo: C.refPasses === "4", ...(refMedia() ? { reference_videos: await motionVideos(), reference_audios: C.refAudios, reference_video_sound: C.video_sound, ...(motionFields() ? { motion: { pack: C.motion.pack, layer: C.motion.layer, mode: C.motion.mode, measured: C.motion.measured || null, free: motionFree() }, pace: C.motion.pace || "auto", silent: paceOf(C.motion) === "flow" && !musicNamed() } : {}) } : {}) } : {}) };
         const j = await api("/api/jobs", isLong() ? { kind: "long", title: S.long[C.seconds] + ": " + (C.action || C.scene || "Video").slice(0, 40), params: { ...base, total_seconds: Number(C.seconds), beats: (C.beats || "").split("\n") } }
           : { kind: "video", title: (C.action || C.scene || "Clip").slice(0, 48), params: { ...base, ...lengthOf(C), ...(C.retake ? { retake: true } : {}) } });

@@ -73,8 +73,11 @@ def timeout_seconds(job: dict) -> int:
         scopes = images.GROUPS[params["group"]][1] if params.get("group") in images.GROUPS else (params.get("scope", "basic"),)
         return sum(images.timeout_seconds(params["feature"], scope) + 120 for scope in scopes)
     import windows_x64_stills
+    import windows_x64_video
     if job.get("kind") == "scout" and windows_x64_stills.is_model((job.get("params") or {}).get("image_model")):
         return windows_x64_stills.TIMEOUT_S
+    if job.get("kind") == "video" and windows_x64_video.is_model((job.get("params") or {}).get("video_model")):
+        return windows_x64_video.TIMEOUT_S
     return 600
 
 

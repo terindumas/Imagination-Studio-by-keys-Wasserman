@@ -168,6 +168,7 @@ import windows_checks
 import windows_foley
 import windows_runtime
 import windows_x64_stills
+import windows_x64_video
 if WINDOWS or WIN32:
     os.environ.update(windows_runtime.session_env())
 WINDOWS_NOTE = ("Native Windows: each feature selects its installed backend. Machine > Feature checks explains model choices, "
@@ -1489,10 +1490,11 @@ def bolt_need(job: dict, resident_gb: float) -> tuple[bool, str] | None:
     measured peak here (Bolt then goes). On a DGX Spark the memory guard's estimate (clips, songs, sound; Drama 3's
     NEED_GB); on a Mac the peaks measured on an M5 Ultra (bolt.MAC_PEAK_GB) against what vm_stat counts as available."""
 
-    if windows_x64_stills.x64_still_job(job):
+    if windows_x64_stills.x64_still_job(job) or windows_x64_video.x64_video_job(job):
         # System RAM and VRAM are separate. The Mac scout peak (28 GB) is not this job.
-        said = windows_x64_stills.admission(job.get("params") or {})
-        return bool(said["fits"]), said["reason"] or "Windows x64 stills fit in free system RAM."
+        said = (windows_x64_video.admission(job.get("params") or {}) if windows_x64_video.x64_video_job(job)
+                else windows_x64_stills.admission(job.get("params") or {}))
+        return bool(said["fits"]), said["reason"] or "Windows x64 fits in free system RAM."
     if not SPARK:
         free = voice.mem_available_gb()
         if free < 0:
@@ -1525,6 +1527,8 @@ def job_fit(job: dict, room: int | None = None) -> dict | None:
     kind, params = job["kind"], job["params"]
     if windows_x64_stills.x64_still_job(job):
         return windows_x64_stills.admission(params)
+    if windows_x64_video.x64_video_job(job):
+        return windows_x64_video.admission(params)
     if not SPARK:
         free = voice.mem_available_gb()
         if free < 0 or kind not in bolt.MAC_PEAK_GB:
@@ -1714,6 +1718,11 @@ def build(kind: str, params: dict, job_id: str, room: bool = True) -> tuple[list
             except (OSError, RuntimeError, ValueError) as error:
                 raise HTTPException(400, str(error)) from None
             return finish.build(params, job_id, local_only=True) if kind == "finish" else action_build(kind, params, job_id)
+        if kind == "video" and windows_x64_video.is_model(params.get("video_model")):
+            try:
+                return windows_x64_video.build(params, HOME, job_id)
+            except (OSError, RuntimeError, ValueError) as error:
+                raise HTTPException(400, str(error)) from None
         if kind != "scout":
             raise HTTPException(501, WINDOWS_NOTE)
         if windows_x64_stills.is_model(params.get("image_model")):
@@ -2636,6 +2645,18 @@ def state() -> dict:
         out["engine"] = (windows_x64_stills.status()["engine"]
                          if windows_x64_stills.is_x64_host() and windows_x64_stills.status()["available"]
                          else "Per-feature native Windows backends")
+        if windows_x64_video.small_gpu():
+            clip = windows_x64_video.status()
+            out["x64_video"] = clip
+            out["capabilities"]["video"] = {"available": clip["available"], "installed": clip["installed"],
+                                            "qualified": False, "why": "" if clip["available"] else clip["why"],
+                                            "h3": False, "h3_note": clip["h3_note"], "backend": "x64-cuda",
+                                            "model": clip["model"], "models": clip["models"]}
+            out["ref2va"] = False
+            out["ref2va_turbo"] = False
+            if clip["available"]:
+                out["engine"] = clip["engine"] if not windows_x64_stills.status()["available"] else (
+                    windows_x64_stills.status()["engine"].replace(" (Windows x64)", "") + " · " + clip["engine"])
     if WINCUDA and not local_windows:
         out["windows_cuda"] = windows_cuda.status()
         out["capabilities"] = {kind: {"available": False, "why": windows_cuda.unsupported(kind)} for kind in windows_cuda.NOT_NATIVE}
@@ -2875,8 +2896,21 @@ def queue_job(body: dict) -> dict:
             if body.get("title") is not None and not isinstance(body["title"], str):
                 raise HTTPException(400, "title is text")
             return enqueue("sfx", body.get("title") or sound_title("sfx", params), params)
+        if body.get("kind") == "video" and windows_x64_video.is_model((body.get("params") or {}).get("video_model")):
+            asked = body["params"]["video_model"]
+            if asked not in windows_x64_video.ready_models():
+                raise HTTPException(501, windows_x64_video.model_why(asked))
+            if body.get("placement") is not None or body.get("sparks") not in (None, 1):
+                raise HTTPException(400, "Windows video runs on this machine only")
+            if body.get("title") is not None and not isinstance(body["title"], str):
+                raise HTTPException(400, "title is text")
+            try:
+                params = windows_x64_video.parameters(body.get("params") or {})
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from None
+            return enqueue("video", body.get("title") or windows_x64_video.MODELS[asked]["title"], params)
         if body.get("kind") != "scout":
-            raise HTTPException(501, WINDOWS_NOTE)
+            raise HTTPException(501, windows_x64_video.H3_NOTE if windows_x64_video.small_gpu() else WINDOWS_NOTE)
         if windows_x64_stills.is_model((body.get("params") or {}).get("image_model")):
             asked = body["params"]["image_model"]
             if asked not in windows_x64_stills.ready_models():
@@ -3621,6 +3655,14 @@ def enqueue(kind: str, title: str, params: dict, estimate: int | None = None) ->
         if not feature_ready["available"]:
             raise HTTPException(501, feature_ready["why"])
         build(kind, params, "check")
+    if local_bounded and kind == "video" and windows_x64_video.is_model(params.get("video_model")):
+        why = windows_x64_video.model_why(params["video_model"])
+        if why:
+            raise HTTPException(501, why)
+        try:
+            params = windows_x64_video.parameters(params)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
     if local_bounded and kind == "scout":
         if windows_x64_stills.is_model(params.get("image_model")):
             why = windows_x64_stills.model_why(params["image_model"])

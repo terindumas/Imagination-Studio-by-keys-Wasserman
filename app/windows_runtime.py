@@ -147,6 +147,10 @@ def bounded(kind: str, params: dict | None = None) -> bool:
         if windows_x64_stills.is_model(model):
             return True
         return model == "sd-turbo"
+    if kind == "video":
+        import windows_x64_video
+        if windows_x64_video.is_model((params or {}).get("video_model")):
+            return True
     if kind in ("hlg", "finish", "export"):
         return mode()["enabled"]
     if kind in ("sfx", "foley"):
@@ -287,6 +291,10 @@ def default_image() -> str:
 def freeze(kind: str, params: dict) -> dict:
     if kind == "scout" and not params.get("image_model"):
         return {**params, "image_model": default_image()}
+    if kind == "video" and not params.get("video_model"):
+        import windows_x64_video
+        if windows_x64_video.small_gpu():
+            return {**params, "video_model": windows_x64_video.default_model()}
     return params
 
 
